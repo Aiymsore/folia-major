@@ -1,0 +1,30 @@
+[package]
+name = "folia-apple-music-smtc-helper"
+version = "0.1.0"
+edition = "2021"
+description = "Windows SMTC reader for Apple Music, exposing the current session as a JSONL event stream for Folia"
+license = "AGPL-3.0"
+
+# The windows crate is target-gated so `cargo test` (pure-logic modules: cli.rs / events.rs)
+# still builds and runs on non-Windows hosts, e.g. a Linux dev machine or CI lint job. Mirrors
+# packaging/windows/wallpaper-helper/Cargo.toml.
+#
+# Media_Control is the Windows Runtime namespace that holds GlobalSystemMediaTransportControlsSession
+# / ...Manager and ...MediaProperties. Storage_Streams is pulled in because
+# MediaProperties::Thumbnail is typed as a Storage::Streams::IRandomAccessStreamReference.
+# Foundation + Foundation_Collections carry the WinRT async and collection plumbing every call in
+# session.rs goes through. Win32_System_Com is needed for CoIncrementMTAUsage, which initializes the
+# WinRT apartment the polling thread runs in.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Media_Control",
+    "Storage_Streams",
+    "Win32_System_Com",
+] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

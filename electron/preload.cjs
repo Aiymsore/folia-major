@@ -189,6 +189,19 @@ contextBridge.exposeInMainWorld('electron', {
     },
     getDiscordPresenceStatus: () => ipcRenderer.invoke('discord-presence-get-status'),
     publishDiscordPresenceSnapshot: (snapshot) => ipcRenderer.invoke('discord-presence-publish-snapshot', snapshot),
+    // Apple Music bridge. appleMusicGetState is safe to poll; appleMusicStart only exists so a
+    // diagnostic surface can force the helper up without waiting for the first read.
+    // appleMusicSendCommand (Phase 2) resolves with a structured result for every outcome — success,
+    // a declined transport call, a missing Apple Music session, or a bridge-local failure — so the
+    // renderer never has to tell a rejected IPC call apart from a real one.
+    appleMusicGetState: () => ipcRenderer.invoke('apple-music-smtc-get-status'),
+    appleMusicStart: () => ipcRenderer.invoke('apple-music-smtc-start'),
+    appleMusicSendCommand: (request) => ipcRenderer.invoke('apple-music-smtc-command', request),
+    onAppleMusicStateChanged: (callback) => {
+      const listener = (_event, status) => callback(status);
+      ipcRenderer.on('apple-music-smtc-status-changed', listener);
+      return () => ipcRenderer.removeListener('apple-music-smtc-status-changed', listener);
+    },
     getPlaybackSyncBridgeStatus: () => ipcRenderer.invoke('playback-sync-bridge-get-status'),
     getVoiceInputPauseStatus: () => ipcRenderer.invoke('voice-input-pause-get-status'),
     onVoiceInputStateChanged: (callback) => {

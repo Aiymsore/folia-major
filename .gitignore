@@ -80,6 +80,10 @@ mods/*.zip
 build/folia-wallpaper-helper.exe
 packaging/windows/wallpaper-helper/target/
 
+# Built by packaging/windows/build-apple-music-smtc-helper.mjs (Apple Music SMTC reader).
+build/folia-apple-music-smtc-helper.exe
+packaging/windows/apple-music-smtc-helper/target/
+
 # Python bytecode from the htdemucs runner, written beside it by the downloaded runtime.
 __pycache__/
 

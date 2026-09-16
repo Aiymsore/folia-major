@@ -20,6 +20,7 @@ const { DEFAULT_DISCORD_APPLICATION_ID, createDiscordPresenceController } = requ
 const { createVoiceInputPauseMonitor } = require('./voiceInputPause.cjs');
 const { createDisplaySleepBlocker } = require('./displaySleepBlocker.cjs');
 const { createLyricApi } = require('./lyricApi.cjs');
+const appleMusicSmtcModule = require('./appleMusicSmtcBridge.cjs');
 const { createLocalCoverAssetStore, getLocalCoverAssetDirectory } = require('./localCoverAssets.cjs');
 const {
   compareVersions,
@@ -338,6 +339,42 @@ function resolveWallpaperHelperPath() {
   const candidate = path.join(process.resourcesPath, 'folia-wallpaper-helper.exe');
   return fs.existsSync(candidate) ? candidate : null;
 }
+// The Apple Music SMTC helper ships as resources/folia-apple-music-smtc-helper.exe (built by
+// packaging/windows/build-apple-music-smtc-helper.mjs). FOLIA_APPLE_MUSIC_SMTC_HELPER_PATH
+// overrides it for non-packaged (dev) runs. A missing binary leaves the bridge unavailable rather
+// than failing anything: Apple Music support is additive and must never block app startup.
+function resolveAppleMusicSmtcHelperPath() {
+  if (process.platform !== 'win32') {
+    return null;
+  }
+  const override = process.env.FOLIA_APPLE_MUSIC_SMTC_HELPER_PATH;
+  if (override) {
+    return fs.existsSync(override) ? override : null;
+  }
+  const candidate = path.join(process.resourcesPath, 'folia-apple-music-smtc-helper.exe');
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+// Phase 1 Apple Music bridge. Created lazily on first status request so an install that never looks
+// at Apple Music never carries a helper process. Read-only: the helper exposes no transport command.
+let appleMusicSmtcBridge = null;
+
+function ensureAppleMusicSmtcBridge() {
+  if (appleMusicSmtcBridge) {
+    return appleMusicSmtcBridge;
+  }
+  appleMusicSmtcBridge = appleMusicSmtcModule.createAppleMusicSmtcBridge({
+    helperPath: () => resolveAppleMusicSmtcHelperPath(),
+    onStatusChanged: (status) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('apple-music-smtc-status-changed', status);
+      }
+    },
+  });
+  appleMusicSmtcBridge.start();
+  return appleMusicSmtcBridge;
+}
+
 function refreshWindowsDesktopWallpaper() {
   if (process.platform !== 'win32') {
     return;
@@ -4990,6 +5027,98 @@ function createWindow(options = {}) {
   // itself is no longer rendered in wallpaper mode.
   setMainWindowClickThroughEnabled(mainWindowClickThroughEnabled);
   updateWindowThumbarButtons();
+
+  // TEMPORARY acceptance probe for the Apple Music SMTC chain. Gated behind
+  // FOLIA_APPLE_MUSIC_SMTC_VERIFY=1 so no normal run touches it. Drives the preload bridge from the
+  // renderer's own context and reports on the MAIN process' stdout, which is what the verification
+  // runner captures. Removed once the chain is covered by the real player integration.
+  if (process.env.FOLIA_APPLE_MUSIC_SMTC_VERIFY === '1') {
+    const PROBE_TAG = '[apple-music-smtc-verify]';
+    const log = (tag, payload) => {
+      console.log(`${PROBE_TAG} ${tag} ${JSON.stringify(payload)}`);
+    };
+    // The transport commands actually change what the user hears, so they only run when the operator
+    // asked for them (test/manual/verify-apple-music-smtc-electron.mjs --commands). The read path
+    // above stays safe to run unattended.
+    const probeCommands = process.env.FOLIA_APPLE_MUSIC_SMTC_VERIFY_COMMANDS === '1';
+    // pause → play → seek → next → previous → toggle, matching the helper's own scripted sequence.
+    // Deliberately the same six calls so the two acceptance paths cannot disagree about coverage.
+    const PROBE_COMMANDS = [
+      { command: 'pause' },
+      { command: 'play' },
+      { command: 'seek', positionMs: 5000 },
+      { command: 'next' },
+      { command: 'previous' },
+      { command: 'toggle-play-pause' },
+    ];
+
+    win.webContents.once('did-finish-load', async () => {
+      log('renderer-loaded', { ok: true });
+
+      // Proves the preload bridge exists in the renderer and reaches the main-process IPC handler.
+      // The command API is reported separately because it is the half Phase 2 adds: a missing
+      // appleMusicSendCommand must be visible here rather than as a failing button later.
+      const shape = await win.webContents.executeJavaScript(
+        'JSON.stringify({ hasGet: typeof window.electron?.appleMusicGetState, hasOn: typeof window.electron?.onAppleMusicStateChanged, hasSend: typeof window.electron?.appleMusicSendCommand })',
+      );
+      log('preload-bridge', JSON.parse(shape));
+
+      // Subscribes in the renderer, then pushes every status the main process broadcasts back to
+      // main through a global, so the push path is observable from here.
+      await win.webContents.executeJavaScript(`
+        (() => {
+          window.__appleMusicSmtcPushes = [];
+          if (typeof window.electron?.onAppleMusicStateChanged === 'function') {
+            window.electron.onAppleMusicStateChanged((status) => {
+              window.__appleMusicSmtcPushes.push(status);
+            });
+          }
+          return true;
+        })()
+      `);
+
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        const raw = await win.webContents.executeJavaScript(
+          'window.electron.appleMusicGetState().then(s => JSON.stringify(s)).catch(e => JSON.stringify({ error: String(e && e.message || e) }))',
+        );
+        log(`pull#${attempt}`, JSON.parse(raw));
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
+      const pushed = await win.webContents.executeJavaScript(
+        'JSON.stringify(window.__appleMusicSmtcPushes || [])',
+      );
+      const pushes = JSON.parse(pushed);
+      log('pushed-count', { count: pushes.length });
+      if (pushes.length > 0) {
+        log('push#last', pushes[pushes.length - 1]);
+      }
+
+      // Phase 2: the reverse channel, driven through the renderer's preload method so the probe
+      // covers preload -> IPC -> bridge -> helper stdin -> WinRT and the response back.
+      if (probeCommands) {
+        let delivered = 0;
+        for (const request of PROBE_COMMANDS) {
+          // eslint-disable-next-line no-await-in-loop
+          const raw = await win.webContents.executeJavaScript(
+            `window.electron.appleMusicSendCommand(${JSON.stringify(request)})
+               .then(r => JSON.stringify(r))
+               .catch(e => JSON.stringify({ ok: false, command: ${JSON.stringify(request.command)}, targetAppUserModelId: null, error: String(e && e.message || e), errorKind: 'probe-error', completedAtMs: null }))`,
+          );
+          const reply = JSON.parse(raw);
+          if (reply.ok) delivered += 1;
+          log(`command#${request.command}`, reply);
+          // A gap between commands: SMTC republishes playback state asynchronously, and firing the
+          // next call immediately would not prove the previous one was processed.
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((resolve) => setTimeout(resolve, 600));
+        }
+        log('commands-done', { requested: PROBE_COMMANDS.length, delivered });
+      }
+
+      log('done', { ok: true });
+    });
+  }
   win.on('resize', () => {
     saveWindowState(win, { deferred: true });
   });
@@ -5416,6 +5545,12 @@ app.on('before-quit', () => {
   }
   voiceInputPauseMonitor.stop();
   displaySleepBlocker.stop();
+  // Read-only bridge: nothing to restore, just stop the child so it cannot outlive the app. It
+  // would also self-stop on stdin EOF, but disposing here releases the timers deterministically.
+  if (appleMusicSmtcBridge) {
+    appleMusicSmtcBridge.dispose();
+    appleMusicSmtcBridge = null;
+  }
   // Detach (graceful) instead of killing: the helper un-parents the window from the WorkerW
   // and repaints the layer before the window is destroyed — a window torn down while still
   // parented leaves its last frame stuck on the desktop. killHelper() is the fallback for
@@ -6211,6 +6346,36 @@ ipcMain.handle('playback-sync-bridge-get-status', (event) => {
   }
 
   return buildPlaybackSyncBridgeStatus();
+});
+
+ipcMain.handle('apple-music-smtc-get-status', (event) => {
+  if (!isTrustedMainWindowContents(event.sender)) {
+    throw new Error('Untrusted renderer attempted to read Apple Music SMTC status.');
+  }
+
+  // Lazy start: the helper process only exists once something actually asks about Apple Music.
+  return ensureAppleMusicSmtcBridge().getStatus();
+});
+
+ipcMain.handle('apple-music-smtc-start', (event) => {
+  if (!isTrustedMainWindowContents(event.sender)) {
+    throw new Error('Untrusted renderer attempted to start the Apple Music SMTC bridge.');
+  }
+
+  return ensureAppleMusicSmtcBridge().getStatus();
+});
+
+// Phase 2 reverse channel. The request is validated inside the bridge — one source of truth for what
+// a well-formed command is — and always resolves with a structured result, so a rejected command is
+// a value here rather than a rejected IPC call the renderer would have to tell apart from a crash.
+// With no Apple Music session the reply is `session-not-found` and names no target, so the renderer
+// can show that nothing else was controlled.
+ipcMain.handle('apple-music-smtc-command', async (event, request) => {
+  if (!isTrustedMainWindowContents(event.sender)) {
+    throw new Error('Untrusted renderer attempted to send an Apple Music SMTC command.');
+  }
+
+  return ensureAppleMusicSmtcBridge().sendCommand(request);
 });
 
 ipcMain.handle('voice-input-pause-get-status', (event) => {

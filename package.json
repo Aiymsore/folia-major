@@ -47,9 +47,10 @@
     "dev:electron:dist:swiftshader": "cross-env ELECTRON_DEV=false ELECTRON=true ELECTRON_LINUX_PACKAGED_GRAPHICS=true FOLIA_LINUX_GRAPHICS_MODE=swiftshader FOLIA_WINDOWTOLAYER_PATH=build/windowtolayer vite build && electron .",
     "dev:electron:dist:software": "cross-env ELECTRON_DEV=false ELECTRON=true ELECTRON_LINUX_PACKAGED_GRAPHICS=true FOLIA_LINUX_GRAPHICS_MODE=software FOLIA_WINDOWTOLAYER_PATH=build/windowtolayer vite build && electron .",
     "build:electron:dir": "cross-env ELECTRON_DEV=false ELECTRON=true vite build && npm run build:windowtolayer && npm run build:wallpaper-helper && electron-builder --linux dir",
-    "build:electron": "cross-env ELECTRON_DEV=false ELECTRON=true vite build && npm run build:windowtolayer && npm run build:wallpaper-helper && electron-builder",
+    "build:electron": "cross-env ELECTRON_DEV=false ELECTRON=true vite build && npm run build:windowtolayer && npm run build:wallpaper-helper && npm run build:apple-music-smtc-helper && electron-builder",
     "build:windowtolayer": "node packaging/linux/build-windowtolayer.mjs",
     "build:wallpaper-helper": "node packaging/windows/build-wallpaper-helper.mjs",
+    "build:apple-music-smtc-helper": "node packaging/windows/build-apple-music-smtc-helper.mjs",
     "build:ffmpeg": "node packaging/ffmpeg/fetch-ffmpeg.mjs",
     "contributors:add": "npx all-contributors-cli add",
     "contributors:generate": "npx all-contributors-cli generate",
@@ -158,7 +159,8 @@
           "from": "build",
           "to": ".",
           "filter": [
-            "folia-wallpaper-helper.exe"
+            "folia-wallpaper-helper.exe",
+            "folia-apple-music-smtc-helper.exe"
           ]
         }
       ]

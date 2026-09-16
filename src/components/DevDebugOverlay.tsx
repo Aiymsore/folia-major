@@ -4,6 +4,7 @@ import type { ThemeMode, DualTheme, LyricData, LyricAlternateText, LyricBackgrou
 import { sonnetDebugState, type SonnetDebugShotInfo } from './visualizer/sonnet/sonnetDebug';
 import ConsoleLogPanel from './shared/ConsoleLogPanel';
 // import CoverSizeAuditPanel from './shared/CoverSizeAuditPanel';
+import AppleMusicSmtcPanel from './debug/AppleMusicSmtcPanel';
 import DraggableDebugWindow from './shared/DraggableDebugWindow';
 import { isConsoleCaptureEnabled, subscribeToConsoleLog } from '../utils/consoleLogBuffer';
 
@@ -610,7 +611,7 @@ const DevDebugOverlay: React.FC<DevDebugOverlayProps> = ({
 }) => {
     // Console first: on the desktop build this overlay is the only console there is, so reading it
     // is what the shortcut is pressed for.
-    const [activeTab, setActiveTab] = useState<'console' | 'memory' /* | 'covers' */ | 'playback' | 'lyrics' | 'theme' | 'sonnet'>('console');
+    const [activeTab, setActiveTab] = useState<'console' | 'memory' /* | 'covers' */ | 'playback' | 'lyrics' | 'theme' | 'sonnet' | 'applemusic'>('console');
     // The switch in Settings > Developer governs this whole overlay, not just its Console tab. It
     // is the debug back room's switch: off means the chord opens nothing at all. Hiding one tab and
     // leaving the other five was reading the switch as "the log" when it is named for the room.
@@ -765,6 +766,7 @@ const DevDebugOverlay: React.FC<DevDebugOverlayProps> = ({
                     <TabButton label="Lyrics" isActive={activeTab === 'lyrics'} onClick={() => setActiveTab('lyrics')} isDaylight={isDaylight} />
                     <TabButton label="Theme" isActive={activeTab === 'theme'} onClick={() => setActiveTab('theme')} isDaylight={isDaylight} />
                     <TabButton label="Sonnet" isActive={activeTab === 'sonnet'} onClick={() => setActiveTab('sonnet')} isDaylight={isDaylight} />
+                    <TabButton label="Apple Music" isActive={activeTab === 'applemusic'} onClick={() => setActiveTab('applemusic')} isDaylight={isDaylight} />
                 </div>
 
                 {activeTab === 'console' && (
@@ -1002,6 +1004,11 @@ const DevDebugOverlay: React.FC<DevDebugOverlayProps> = ({
                 {activeTab === 'sonnet' && (
                     <div className="mt-3 grid gap-3">
                         <SonnetDebugPanel isDaylight={isDaylight} panelClass={panelClass} />
+                    </div>
+                )}
+                {activeTab === 'applemusic' && (
+                    <div className="mt-3 grid gap-3">
+                        <AppleMusicSmtcPanel panelClass={panelClass} />
                     </div>
                 )}
             </div>

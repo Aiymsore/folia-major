@@ -196,6 +196,75 @@ declare global {
     updatedAt: number;
   }
 
+  /**
+   * Apple Music SMTC bridge status. Mirrors the status object assembled by
+   * electron/appleMusicSmtcBridge.cjs.
+   *
+   * `connected` describes the Apple Music session being visible, not the helper being alive —
+   * Apple Music simply not running is a normal state, reported with `connected: false` while
+   * `helperState` stays 'running'.
+   */
+  interface ElectronAppleMusicSmtcStatus {
+    bridgeAvailable: boolean;
+    helperState: 'stopped' | 'starting' | 'running' | 'missing';
+    connected: boolean;
+    sourceAppUserModelId: string | null;
+    title: string | null;
+    artist: string | null;
+    album: string | null;
+    playbackStatus: string | null;
+    positionMs: number | null;
+    durationMs: number | null;
+    hasThumbnail: boolean;
+    /** Unix epoch ms when the helper captured this snapshot. Null when no session is loaded. */
+    updatedAt: number | null;
+    /** Unix epoch ms of the last event received from the helper, of any kind. */
+    lastEventAt: number | null;
+    sessionCount: number | null;
+    /**
+     * Outcome of the most recent transport command (Phase 2), or null when none was sent this run.
+     * Held here rather than as a separate subscription so the diagnostic surface shows the result of
+     * its own button press without a second channel.
+     */
+    lastCommand: ElectronAppleMusicSmtcCommandResult | null;
+    lastError: { message: string; kind: string | null } | null;
+    isStale?: boolean;
+    snapshotStaleMs?: number;
+  }
+
+  /** Transport commands the bridge will forward. Anything else is refused before it reaches Windows. */
+  type ElectronAppleMusicSmtcCommandName =
+    | 'play'
+    | 'pause'
+    | 'toggle-play-pause'
+    | 'previous'
+    | 'next'
+    | 'seek';
+
+  /** A command request. `positionMs` is required by 'seek' and rejected for every other command. */
+  interface ElectronAppleMusicSmtcCommandRequest {
+    command: ElectronAppleMusicSmtcCommandName;
+    positionMs?: number;
+  }
+
+  /**
+   * Structured outcome of one command. `ok: false` is a normal result, not an exception: the
+   * command is a value with a machine-readable `errorKind` so the caller can tell "Apple Music is not
+   * running" (`session-not-found`) from "the OS declined" (`controller-declined`) from "the helper
+   * was gone" (`helper-unavailable` / `helper-exited` / `timeout`).
+   *
+   * `targetAppUserModelId` is the session the command was addressed to, and is null whenever no
+   * Apple Music session was resolved — which is how a caller proves nothing else was controlled.
+   */
+  interface ElectronAppleMusicSmtcCommandResult {
+    ok: boolean;
+    command: string;
+    targetAppUserModelId: string | null;
+    error: string | null;
+    errorKind: string | null;
+    completedAtMs: number | null;
+  }
+
   interface ElectronMainWindowClickThroughState {
     enabled: boolean;
     unlockHoverActive?: boolean;
@@ -761,6 +830,14 @@ declare global {
       onLyricApiStatusChanged: (callback: (status: import('./types/lyricApi').LyricApiStatus) => void) => () => void;
       getDiscordPresenceStatus: () => Promise<ElectronDiscordPresenceStatus>;
       publishDiscordPresenceSnapshot: (snapshot: ElectronDiscordPresenceSnapshot) => Promise<ElectronDiscordPresenceStatus>;
+      // Apple Music bridge. Reading and starting are safe at any time; sending a command resolves
+      // with a structured result for every outcome, including failures.
+      appleMusicGetState: () => Promise<ElectronAppleMusicSmtcStatus>;
+      appleMusicStart: () => Promise<ElectronAppleMusicSmtcStatus>;
+      appleMusicSendCommand: (
+        request: ElectronAppleMusicSmtcCommandRequest,
+      ) => Promise<ElectronAppleMusicSmtcCommandResult>;
+      onAppleMusicStateChanged: (callback: (status: ElectronAppleMusicSmtcStatus) => void) => () => void;
       getPlaybackSyncBridgeStatus: () => Promise<ElectronPlaybackSyncBridgeStatus>;
       getVoiceInputPauseStatus: () => Promise<ElectronVoiceInputPauseStatus>;
       onVoiceInputStateChanged: (callback: (state: ElectronVoiceInputPauseStatus) => void) => () => void;
