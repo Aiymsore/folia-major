@@ -293,6 +293,16 @@ impl Transport for SessionTransport {
             }
             Command::Next => self.call("TrySkipNextAsync", |session| session.TrySkipNextAsync()?.join()),
             Command::Seek { position_ms } => self.call("TryChangePlaybackPositionAsync", |session| {
+                // Measured limitation (Windows 11 26200 + Apple Music, 2026-09): this call returns TRUE
+                // and Apple Music does not move. The session reports
+                // `GetPlaybackInfo().Controls.IsPlaybackPositionEnabled == false`, so the OS accepts
+                // the request and the application ignores it - the same machine answers TRUE for
+                // pause/play/next/previous, which is why seek alone is a no-op. The timeline is well
+                // formed (MinSeekTime 0 / MaxSeekTime = track length), so there is nothing to fix on
+                // this side: the value sent is correct (see ms_to_ticks, which has its own test) and
+                // the returned bool is reported faithfully. Do not "repair" this by retrying - a retry
+                // only repeats a call the application has already refused. Renderer-side note:
+                // handleAppleMusicSeek in src/hooks/useTransportDispatcher.ts.
                 session.TryChangePlaybackPositionAsync(ms_to_ticks(position_ms))?.join()
             }),
         };

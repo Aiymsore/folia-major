@@ -2635,6 +2635,13 @@ export default {
     "coverCacheFailed": "Metadata was saved, but the cover could not be cached. The online URL will still be used when available.",
     "lyricsNotAppliedOtherSaved": "Lyrics were not applied; the other selections were saved.",
   },
+  "appleMusic": {
+    "title": "Apple Music",
+    "connected": "Connected",
+    "notRunning": "Apple Music not running",
+    "unavailable": "Unavailable",
+    "stageActive": "Exit Stage to control Apple Music",
+  },
   "navidrome": {
     "title": "Navi",
     "enable": "Connect Navidrome (Experimental)",

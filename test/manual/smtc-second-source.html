@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Folia SMTC second-source probe</title>
+<!--
+  test/manual/smtc-second-source.html
+
+  Standalone second media source for SMTC experiments. It exists so a browser can hold an ACTIVE
+  system media session at the same time as Apple Music, which is the only way to make Apple Music a
+  NON-current SMTC session. Not part of the app: no Folia code, Electron, or IPC is involved, and
+  nothing under src/ or electron/ references this file.
+
+  The tone is generated in JavaScript rather than shipped as a media file, so the probe has no
+  binary asset and no network dependency. `window.__smtcProbe.start()` is exposed for automation
+  (Chrome DevTools Protocol Runtime.evaluate); `window.__smtcProbe.state()` reports progress.
+-->
+<style>
+  body { font: 13px/1.5 system-ui, sans-serif; margin: 24px; background: #14161a; color: #e8eaed; }
+  #state { font-size: 32px; font-weight: 600; margin: 12px 0; }
+  .on { color: #7ee787; }
+  .off { color: #ff7b72; }
+  button { font: inherit; padding: 8px 16px; }
+  code { color: #a5d6ff; }
+</style>
+</head>
+<body>
+<h1>SMTC second-source probe</h1>
+<div id="state">idle</div>
+<div id="position">position: -</div>
+<div id="detail"></div>
+<p><button id="start">start playback</button></p>
+<p>Keeps a 440 Hz tone looping forever so the browser owns a system media session while the probe
+   measures Apple Music as a <em>non-current</em> SMTC session.</p>
+
+<script>
+(() => {
+  const stateEl = document.getElementById('state');
+  const positionEl = document.getElementById('position');
+  const detailEl = document.getElementById('detail');
+  const startButton = document.getElementById('start');
+
+  // 2 s of 16-bit mono 44.1 kHz 440 Hz PCM, wrapped in a WAV header. Built here so the page needs
+  // no asset; loop=true keeps the session alive for as long as the probe needs it.
+  const buildToneWav = (seconds = 2, frequency = 440, sampleRate = 44100) => {
+    const sampleCount = Math.floor(seconds * sampleRate);
+    const buffer = new ArrayBuffer(44 + sampleCount * 2);
+    const view = new DataView(buffer);
+    const writeAscii = (offset, text) => {
+      for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+    };
+
+    writeAscii(0, 'RIFF');
+    view.setUint32(4, 36 + sampleCount * 2, true);
+    writeAscii(8, 'WAVE');
+    writeAscii(12, 'fmt ');
+    view.setUint32(16, 16, true);       // PCM chunk size
+    view.setUint16(20, 1, true);        // PCM
+    view.setUint16(22, 1, true);        // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true); // byte rate
+    view.setUint16(32, 2, true);        // block align
+    view.setUint16(34, 16, true);       // bits per sample
+    writeAscii(36, 'data');
+    view.setUint32(40, sampleCount * 2, true);
+
+    for (let i = 0; i < sampleCount; i++) {
+      // Quiet (about -20 dBFS) so a real listening session is not blasted during the probe.
+      const sample = Math.sin((2 * Math.PI * frequency * i) / sampleRate) * 0.1;
+      view.setInt16(44 + i * 2, sample * 0x7fff, true);
+    }
+
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return 'data:audio/wav;base64,' + btoa(binary);
+  };
+
+  const audio = new Audio(buildToneWav());
+  audio.loop = true;
+  audio.volume = 1;
+
+  const render = () => {
+    const playing = !audio.paused && !audio.ended;
+    stateEl.textContent = playing ? 'PLAYING' : (audio.paused ? 'paused' : 'ready');
+    stateEl.className = playing ? 'on' : 'off';
+    positionEl.textContent = 'position: ' + audio.currentTime.toFixed(3) + ' / ' +
+      (Number.isFinite(audio.duration) ? audio.duration.toFixed(3) : '?');
+  };
+
+  audio.addEventListener('timeupdate', render);
+  audio.addEventListener('play', render);
+  audio.addEventListener('pause', render);
+  audio.addEventListener('error', () => {
+    detailEl.textContent = 'audio error: ' + (audio.error && audio.error.message || 'unknown');
+  });
+
+  const start = async () => {
+    try {
+      await audio.play();
+      detailEl.textContent = 'play() resolved at ' + new Date().toISOString();
+      render();
+      return true;
+    } catch (error) {
+      detailEl.textContent = 'play() rejected: ' + error;
+      render();
+      return false;
+    }
+  };
+
+  startButton.addEventListener('click', start);
+
+  // Media Session metadata gives the session a stable identity for the SMTC inventory.
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: 'SMTC second-source probe',
+      artist: 'Folia manual test',
+      album: 'not part of the app',
+    });
+  }
+
+  window.__smtcProbe = {
+    start,
+    state: () => ({
+      paused: audio.paused,
+      ended: audio.ended,
+      currentTime: audio.currentTime,
+      duration: audio.duration,
+      readyState: audio.readyState,
+    }),
+  };
+
+  // Best-effort autoplay; the automation path calls start() over CDP if this is blocked.
+  void start();
+})();
+</script>
+</body>
+</html>

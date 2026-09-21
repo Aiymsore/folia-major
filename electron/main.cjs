@@ -21,6 +21,7 @@ const { createVoiceInputPauseMonitor } = require('./voiceInputPause.cjs');
 const { createDisplaySleepBlocker } = require('./displaySleepBlocker.cjs');
 const { createLyricApi } = require('./lyricApi.cjs');
 const appleMusicSmtcModule = require('./appleMusicSmtcBridge.cjs');
+const appleMusicSmtcHelperPathModule = require('./appleMusicSmtcHelperPath.cjs');
 const { createLocalCoverAssetStore, getLocalCoverAssetDirectory } = require('./localCoverAssets.cjs');
 const {
   compareVersions,
@@ -343,16 +344,21 @@ function resolveWallpaperHelperPath() {
 // packaging/windows/build-apple-music-smtc-helper.mjs). FOLIA_APPLE_MUSIC_SMTC_HELPER_PATH
 // overrides it for non-packaged (dev) runs. A missing binary leaves the bridge unavailable rather
 // than failing anything: Apple Music support is additive and must never block app startup.
+//
+// The priority order itself (override → resources → dev build/) lives in
+// electron/appleMusicSmtcHelperPath.cjs so it can be unit-tested; everything Electron-shaped is
+// passed in from here. The dev fallback is what makes the exe that `npm run
+// build:apple-music-smtc-helper` writes to <repo>/build/ findable under `electron .`, where
+// `process.resourcesPath` names Electron's own resources directory rather than the checkout.
 function resolveAppleMusicSmtcHelperPath() {
-  if (process.platform !== 'win32') {
-    return null;
-  }
-  const override = process.env.FOLIA_APPLE_MUSIC_SMTC_HELPER_PATH;
-  if (override) {
-    return fs.existsSync(override) ? override : null;
-  }
-  const candidate = path.join(process.resourcesPath, 'folia-apple-music-smtc-helper.exe');
-  return fs.existsSync(candidate) ? candidate : null;
+  return appleMusicSmtcHelperPathModule.resolveAppleMusicSmtcHelperPath({
+    platform: process.platform,
+    env: process.env,
+    resourcesPath: process.resourcesPath,
+    isPackaged: app.isPackaged,
+    appPath: path.join(__dirname, '..'),
+    fileExists: (candidate) => fs.existsSync(candidate),
+  });
 }
 
 // Phase 1 Apple Music bridge. Created lazily on first status request so an install that never looks

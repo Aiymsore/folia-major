@@ -19,6 +19,7 @@ import { getLocalLibraryAvailability } from '../services/localLibraryAvailabilit
 import { importLocalPlaylistFile } from '../services/localPlaylistFileService';
 import { useOnlineProviderQrLogin } from '../hooks/useOnlineProviderQrLogin';
 import type { OnlineProviderPlatformState } from '../hooks/useOnlineProviderPlatform';
+import type { PlaybackSwitcherEntries } from '../hooks/usePlaybackSwitcherEntries';
 import { omni } from '../services/onlineMusic/omni';
 import { getPersonalFmSelectionLabel } from '../services/onlineMusic/fmModes';
 import { usePersonalFmModeStore } from '../stores/usePersonalFmModeStore';
@@ -54,6 +55,12 @@ const LOGIN_METHOD_ICONS: Record<string, string> = {
 
 interface Grid3DProps {
     onlineProviderPlatform?: OnlineProviderPlatformState;
+    /**
+     * Phase 3A: the platform menu's entries with the Apple Music backend entry appended, plus the
+     * backend-aware click handler. Passed in rather than built here because selecting Apple Music has
+     * to pause Folia, and the pause callback lives in App (see usePlaybackSwitcherEntries).
+     */
+    playbackSwitcherEntries?: PlaybackSwitcherEntries;
     onPlaySong: (song: SongResult, playlistCtx?: SongResult[], isFmCall?: boolean) => void;
     onBackToPlayer: () => void;
     onRefreshUser: () => void;
@@ -137,6 +144,7 @@ export const Grid3D: React.FC<Grid3DProps> = (props) => {
         stageIsActive = false,
         onOpenStagePlayer,
         onlineProviderPlatform,
+        playbackSwitcherEntries,
         isInteractive = true,
     } = props;
 
@@ -1006,6 +1014,11 @@ export const Grid3D: React.FC<Grid3DProps> = (props) => {
                     activeProviderId={activeProviderId}
                     isDaylight={isDaylight}
                     onBackToPlayer={onBackToPlayer}
+                    // Phase 3A: the same menu, with the Apple Music entry appended and every click
+                    // routed through the backend-aware handler. Native providers still end up in
+                    // switchProvider; the Apple Music entry only writes activePlaybackBackend.
+                    switcherEntries={playbackSwitcherEntries?.entries}
+                    onSelectEntry={playbackSwitcherEntries?.onSelectEntry}
                     onSelect={provider => {
                         if (provider.status === 'authenticated') {
                             void onlineProviderPlatform.switchProvider(provider.providerId);

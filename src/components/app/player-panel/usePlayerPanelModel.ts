@@ -11,7 +11,11 @@ import { useAudioSettingsStore } from '../../../stores/useAudioSettingsStore';
 import { useVisualizerSettingsStore } from '../../../stores/useVisualizerSettingsStore';
 import { usePlayerChromeSettingsStore } from '../../../stores/usePlayerChromeSettingsStore';
 import { useOnlineProviderAccountStore } from '../../../stores/useOnlineProviderAccountStore';
-import { selectDisplayCoverUrl, selectDisplayLyrics, usePlaybackStore } from '../../../stores/usePlaybackStore';
+// `selectDisplayCoverUrl` is gone from this import on purpose: the cover now comes from
+// `useEffectivePlaybackModel().coverUrl` (see below), which is the same value routed through the
+// selected backend. Keeping the selector here would leave an unused import behind.
+import { selectDisplayLyrics, usePlaybackStore } from '../../../stores/usePlaybackStore';
+import { useEffectivePlaybackModel } from '../../../hooks/useEffectivePlayback';
 import type { LocalSong, SongResult } from '../../../types';
 import type { LocalLibraryCatalogSnapshot } from '../../../hooks/useLocalLibraryCatalog';
 import type { CollectionNavigationOrigin } from '../../../stores/useCollectionNavigationStore';
@@ -73,7 +77,7 @@ export const usePlayerPanelModel = ({
     const replayGainMode = usePlaybackStore(state => state.replayGainMode);
     const lyricTimelineOffsetMs = usePlaybackStore(state => state.lyricTimelineOffsetMs);
     const activePlaybackContext = usePlaybackStore(state => state.activePlaybackContext);
-    const displayCoverUrl = usePlaybackStore(selectDisplayCoverUrl);
+    const displayCoverUrl = useEffectivePlaybackModel().coverUrl;
     const displayLyrics = usePlaybackStore(selectDisplayLyrics);
 
     // 冗余但保留的订阅：`omni.isSongLiked` 走 getState 读账号 store，读不到变化。今天 App 已经

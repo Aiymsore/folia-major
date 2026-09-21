@@ -2567,6 +2567,13 @@ export default {
     "coverCacheFailed": "Metadata disimpan, tetapi sampul tidak dapat di-cache. URL online tetap akan digunakan bila tersedia.",
     "lyricsNotAppliedOtherSaved": "Lirik tidak diterapkan; pilihan lain disimpan."
   },
+  "appleMusic": {
+    "title": "Apple Music",
+    "connected": "Terhubung",
+    "notRunning": "Apple Music tidak berjalan",
+    "unavailable": "Tidak tersedia",
+    "stageActive": "Keluar dari Stage untuk mengontrol Apple Music",
+  },
   "navidrome": {
     "title": "Navi",
     "enable": "Hubungkan Navidrome (Eksperimental)",

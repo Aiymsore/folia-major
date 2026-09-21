@@ -471,7 +471,9 @@ describe('validateCommandRequest', () => {
 
 describe('sendCommand', () => {
   let timers: ReturnType<typeof createTimerHarness>;
-  let child: FakeChild;
+  // Undefined on purpose: "no child" is exactly the state one of these tests asserts, so the
+  // variable has to be able to hold it (see the reset in beforeEach below).
+  let child: FakeChild | undefined;
   let now: number;
 
   function createBridge(overrides: Partial<BridgeOptions> = {}) {
@@ -493,6 +495,10 @@ describe('sendCommand', () => {
   beforeEach(() => {
     timers = createTimerHarness();
     now = 1_000_000;
+    // Reset the module-level fake explicitly. `createBridge` only assigns it inside `spawnFn`, which
+    // never runs for a bridge that was not started — so without this reset, a test asserting "no
+    // child exists" reads the PREVIOUS test's fake and fails on a bridge that behaved correctly.
+    child = undefined;
   });
 
   afterEach(() => {
@@ -504,12 +510,12 @@ describe('sendCommand', () => {
     bridge.start();
 
     const pendingResult = bridge.sendCommand({ command: 'play' });
-    expect(child.stdin.written).toHaveLength(1);
-    const request = JSON.parse(child.stdin.written[0]) as Record<string, unknown>;
+    expect(child!.stdin.written).toHaveLength(1);
+    const request = JSON.parse(child!.stdin.written[0]) as Record<string, unknown>;
     expect(request.command).toBe('play');
     expect(typeof request.id).toBe('string');
 
-    child.stdout.emit('data', `${responseLine({ id: request.id })}\n`);
+    child!.stdout.emit('data', `${responseLine({ id: request.id })}\n`);
     await expect(pendingResult).resolves.toEqual({
       ok: true,
       command: 'play',
@@ -524,10 +530,10 @@ describe('sendCommand', () => {
     const bridge = createBridge();
     bridge.start();
     const pendingResult = bridge.sendCommand({ command: 'seek', positionMs: 42_000 });
-    const request = JSON.parse(child.stdin.written[0]) as Record<string, unknown>;
+    const request = JSON.parse(child!.stdin.written[0]) as Record<string, unknown>;
     expect(request.command).toBe('seek');
     expect(request.positionMs).toBe(42_000);
-    answerLastCommand(child, { id: request.id, command: 'seek' });
+    answerLastCommand(child!, { id: request.id, command: 'seek' });
     await pendingResult;
   });
 
@@ -539,12 +545,12 @@ describe('sendCommand', () => {
 
     const first = bridge.sendCommand({ command: 'play' });
     const second = bridge.sendCommand({ command: 'next' });
-    const [firstRequest, secondRequest] = child.stdin.written.map(
+    const [firstRequest, secondRequest] = child!.stdin.written.map(
       (line) => JSON.parse(line) as { id: string },
     );
 
-    child.stdout.emit('data', `${responseLine({ id: secondRequest.id, command: 'next' })}\n`);
-    child.stdout.emit('data', `${responseLine({ id: firstRequest.id, command: 'play' })}\n`);
+    child!.stdout.emit('data', `${responseLine({ id: secondRequest.id, command: 'next' })}\n`);
+    child!.stdout.emit('data', `${responseLine({ id: firstRequest.id, command: 'play' })}\n`);
 
     await expect(second).resolves.toMatchObject({ ok: true, command: 'next' });
     await expect(first).resolves.toMatchObject({ ok: true, command: 'play' });
@@ -554,7 +560,7 @@ describe('sendCommand', () => {
     const bridge = createBridge();
     bridge.start();
     const pendingResult = bridge.sendCommand({ command: 'pause' });
-    answerLastCommand(child, {
+    answerLastCommand(child!, {
       ok: false,
       command: 'pause',
       error: 'the session refused the command',
@@ -576,7 +582,7 @@ describe('sendCommand', () => {
     expect(result.ok).toBe(false);
     expect(result.errorKind).toBe('invalid-argument');
     // Nothing was written for a refused request.
-    expect(child.stdin.written).toHaveLength(0);
+    expect(child!.stdin.written).toHaveLength(0);
   });
 
   it('refuses to queue a command while the helper is not running', async () => {
@@ -586,6 +592,8 @@ describe('sendCommand', () => {
     const result = await bridge.sendCommand({ command: 'play' });
     expect(result.ok).toBe(false);
     expect(result.errorKind).toBe('helper-unavailable');
+    // Never started, so nothing was spawned: the fake is undefined because no spawnFn call happened,
+    // not because the assertion was loosened. See the reset in beforeEach.
     expect(child).toBeUndefined();
   });
 
@@ -603,13 +611,13 @@ describe('sendCommand', () => {
     const bridge = createBridge();
     bridge.start();
     const pendingResult = bridge.sendCommand({ command: 'play' });
-    const request = JSON.parse(child.stdin.written[0]) as { id: string };
+    const request = JSON.parse(child!.stdin.written[0]) as { id: string };
 
     timers.runTimer(COMMAND_TIMEOUT_MS);
     await pendingResult;
 
     // A late reply for a timed-out id must not throw or resurrect the promise.
-    expect(() => child.stdout.emit('data', `${responseLine({ id: request.id })}\n`)).not.toThrow();
+    expect(() => child!.stdout.emit('data', `${responseLine({ id: request.id })}\n`)).not.toThrow();
   });
 
   it('fails pending commands when the helper exits', async () => {
@@ -617,7 +625,7 @@ describe('sendCommand', () => {
     bridge.start();
     const pendingResult = bridge.sendCommand({ command: 'next' });
 
-    child.emit('exit', 1, null);
+    child!.emit('exit', 1, null);
     await expect(pendingResult).resolves.toMatchObject({ ok: false, errorKind: 'helper-exited' });
   });
 
@@ -633,7 +641,7 @@ describe('sendCommand', () => {
   it('surfaces a write failure instead of leaving the promise pending', async () => {
     const bridge = createBridge();
     bridge.start();
-    child.stdin.write = () => {
+    child!.stdin.write = () => {
       throw new Error('EPIPE');
     };
 
@@ -647,7 +655,7 @@ describe('sendCommand', () => {
     const bridge = createBridge();
     bridge.start();
     const pendingResult = bridge.sendCommand({ command: 'toggle-play-pause' });
-    answerLastCommand(child, { command: 'toggle-play-pause' });
+    answerLastCommand(child!, { command: 'toggle-play-pause' });
     await pendingResult;
 
     expect(bridge.getStatus().lastCommand).toMatchObject({ ok: true, command: 'toggle-play-pause' });
@@ -661,7 +669,7 @@ describe('sendCommand', () => {
     bridge.handleHelperEvent(parseHelperEventLine(snapshotLine())!);
 
     const pendingResult = bridge.sendCommand({ command: 'play' });
-    answerLastCommand(child);
+    answerLastCommand(child!);
     await pendingResult;
 
     // `consumeStdout` is the path the fake child's stdout feeds, so drive the same event through it.

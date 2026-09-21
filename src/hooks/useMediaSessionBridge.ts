@@ -7,7 +7,9 @@ import {
     getSupportedMediaSessionArtworkUrl,
     isMediaSessionSourceReady,
     publishMediaSessionTrack,
+    publishMediaSessionTrackFromTimeline,
 } from '../utils/mediaSessionSync';
+import { useEffectivePlaybackModel } from './useEffectivePlayback';
 
 // Bridges Folia playback state to the browser Media Session API.
 type UseMediaSessionBridgeOptions = {
@@ -50,6 +52,19 @@ export const useMediaSessionBridge = ({
     mediaSessionNextRef,
     isNowPlayingControlDisabledRef,
 }: UseMediaSessionBridgeOptions) => {
+    // Phase 3A: the system media panel follows the active backend. Only the metadata effect below
+    // branches on it — the four action handlers already reach the dispatcher, because the refs they
+    // call are the wrapped ones built in useTransportCommandRefs.
+    const {
+        backend,
+        song: effectiveSong,
+        playerState: effectivePlayerState,
+        positionSec: effectivePositionSec,
+        durationSec: effectiveDurationSec,
+        coverUrl: effectiveCoverUrl,
+        hasTrack: effectiveHasTrack,
+    } = useEffectivePlaybackModel();
+
     useEffect(() => {
         if (!('mediaSession' in navigator)) {
             return;
@@ -108,6 +123,33 @@ export const useMediaSessionBridge = ({
 
     useEffect(() => {
         if (!('mediaSession' in navigator)) {
+            return;
+        }
+
+        // Phase 3A: the Apple Music backend has no audio element, so its metadata comes from the SMTC
+        // snapshot through the explicit-timeline publisher. Both failure modes this branch exists to
+        // prevent are "stale", not "missing": leaving the previous Folia title up, and leaving the
+        // previous Folia artwork up. There are no thumbnail bytes this phase, so the artwork is
+        // deliberately empty rather than reused.
+        if (backend === 'apple-music') {
+            try {
+                if (!effectiveSong) {
+                    navigator.mediaSession.setPositionState();
+                    navigator.mediaSession.metadata = null;
+                    return;
+                }
+                publishMediaSessionTrackFromTimeline(navigator.mediaSession, {
+                    position: effectivePositionSec,
+                    duration: effectiveDurationSec,
+                }, {
+                    title: effectiveSong.name,
+                    artist: effectiveSong.artists.map(artist => artist.name).join(' / ') || unknownArtistLabel,
+                    album: effectiveSong.album?.name ?? '',
+                    artworkUrl: effectiveCoverUrl ?? '',
+                });
+            } catch (e) {
+                console.warn('[MediaSession] Failed to publish Apple Music metadata', e);
+            }
             return;
         }
 
@@ -189,7 +231,23 @@ export const useMediaSessionBridge = ({
             audio.removeEventListener('playing', publish);
             if (disposableArtworkUrl) URL.revokeObjectURL(disposableArtworkUrl);
         };
-    }, [audioRef, audioSrc, cachedCoverUrl, currentSong, getDisplayAudioElement, unknownArtistLabel]);
+        // The effective fields are listed individually rather than as the whole model object: the
+        // model is rebuilt on every render, so depending on it would re-register the audio listeners
+        // continuously. Individual primitives only change when the backend's facts actually change.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+        audioRef,
+        audioSrc,
+        cachedCoverUrl,
+        currentSong,
+        getDisplayAudioElement,
+        unknownArtistLabel,
+        backend,
+        effectiveSong,
+        effectivePositionSec,
+        effectiveDurationSec,
+        effectiveCoverUrl,
+    ]);
 
     useEffect(() => {
         if (!('mediaSession' in navigator)) {
@@ -197,13 +255,16 @@ export const useMediaSessionBridge = ({
         }
 
         try {
+            // Phase 3A: the system panel's play/pause affordance must describe whichever backend owns
+            // the transport. `hasTrack` here is the effective one, so an Apple Music session with no
+            // loaded media reads 'none' rather than claiming a paused track.
             navigator.mediaSession.playbackState = isNowPlayingStageActive
                 ? 'none'
-                : currentSong
-                    ? (playerState === PlayerState.PLAYING ? 'playing' : 'paused')
+                : effectiveHasTrack
+                    ? (effectivePlayerState === PlayerState.PLAYING ? 'playing' : 'paused')
                     : 'none';
         } catch (e) {
             console.warn('[MediaSession] Failed to update playback state', e);
         }
-    }, [currentSong, isNowPlayingStageActive, playerState]);
+    }, [effectiveHasTrack, effectivePlayerState, isNowPlayingStageActive]);
 };

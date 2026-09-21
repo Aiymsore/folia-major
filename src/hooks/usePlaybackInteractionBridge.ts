@@ -15,6 +15,7 @@ import { setIsPanelOpen, useAppViewStore } from '../stores/useAppViewStore';
 import { setIsDevDebugOverlayVisible, setIsMemoryMonitorVisible } from '../stores/useAppChromeStore';
 import { useAudioSettingsStore } from '../stores/useAudioSettingsStore';
 import { currentTime } from '../stores/motionSignals';
+import { handleAppleMusicAction } from './useTransportDispatcher';
 
 // src/hooks/usePlaybackInteractionBridge.ts
 
@@ -132,6 +133,10 @@ export function usePlaybackInteractionBridge({
 
     const togglePlay = useCallback((event?: React.MouseEvent | KeyboardEvent) => {
         event?.stopPropagation();
+
+        // Phase 3A: the Apple Music backend takes the toggle. SMTC has a real toggle, so the local
+        // paused/playing read further down is never consulted for it. Returns true when taken.
+        if (handleAppleMusicAction('toggle')) return;
 
         if (isNowPlayingStageActive) {
             return;

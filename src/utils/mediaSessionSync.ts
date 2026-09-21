@@ -78,8 +78,39 @@ export const publishMediaSessionTrack = (
     audio: Pick<HTMLAudioElement, 'currentTime' | 'duration' | 'playbackRate'>,
     track: MediaSessionTrackMetadata,
     createMetadata: MediaSessionMetadataFactory = init => new MediaMetadata(init)
+) => publishMediaSessionTrackFromTimeline(
+    mediaSession,
+    { position: audio.currentTime, duration: audio.duration, playbackRate: audio.playbackRate },
+    track,
+    createMetadata,
+);
+
+/**
+ * Same publication, from an explicit timeline instead of an audio element.
+ *
+ * Exists for a playback backend that has no `HTMLAudioElement` at all: the Apple Music SMTC bridge
+ * reports position and duration as plain numbers, and fabricating a fake element to reuse the
+ * overload above would introduce a second source of truth for the same two numbers. The ordering
+ * rule is identical — a position state must be established before the metadata is replaced, or
+ * Chromium clears the whole platform session and the panel goes blank.
+ */
+export const publishMediaSessionTrackFromTimeline = (
+    mediaSession: MediaSession,
+    timeline: { position: number; duration: number; playbackRate?: number },
+    track: MediaSessionTrackMetadata,
+    createMetadata: MediaSessionMetadataFactory = init => new MediaMetadata(init),
 ) => {
-    const positionState = createMediaSessionPositionState(audio);
+    const { duration } = timeline;
+    const playbackRate = timeline.playbackRate;
+    const positionState: MediaPositionState | null = Number.isFinite(duration) && duration > 0
+        ? {
+            duration,
+            position: Number.isFinite(timeline.position)
+                ? Math.min(Math.max(timeline.position, 0), duration)
+                : 0,
+            playbackRate: Number.isFinite(playbackRate) && (playbackRate ?? 0) > 0 ? playbackRate as number : 1,
+        }
+        : null;
     if (!positionState) {
         return false;
     }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { selectDisplayPlayerState, usePlaybackStore } from '../stores/usePlaybackStore';
+import { handleAppleMusicAction } from './useTransportDispatcher';
 
 // src/hooks/useTransportCommandRefs.ts
 //
@@ -7,6 +8,16 @@ import { selectDisplayPlayerState, usePlaybackStore } from '../stores/usePlaybac
 // taskbar thumbbar, the remote control and Discord presence. They are registered once with the main
 // process and then fire whenever the user presses something there, so they cannot close over a
 // render's values - they read through these.
+//
+// Phase 3A: this hook is also the single place where the **external** drivers' transport commands
+// become backend-aware. Every ref below is wrapped so an Apple Music backend takes the command
+// before the Folia handler runs; the four drivers (media session action handlers, the taskbar
+// thumbbar, the remote control window, the Stage external controller) therefore need no Apple Music
+// branch of their own.
+//
+// The wrap lives inside the hook rather than at its call site on purpose: assigning it here keeps
+// `resumePlayback` / `pausePlayback` / `handlePrevTrack` / `handleNextTrack` as the effect
+// dependencies, so an unstable caller cannot leave a stale closure in a ref the main process owns.
 
 // Kept as the consumers' exact signatures rather than a widened union: the bridges' ref types are
 // what they are, and widening here would only move the mismatch to their call sites.
@@ -39,19 +50,32 @@ export const useTransportCommandRefs = ({
     const taskbarPlayerStateRef = useRef(displayPlayerState);
 
     useEffect(() => {
-        mediaSessionPlayRef.current = resumePlayback;
+        mediaSessionPlayRef.current = () => {
+            // Taken by Apple Music (sent, or deliberately dropped): the Folia handler must not run.
+            if (handleAppleMusicAction('play')) return Promise.resolve();
+            return resumePlayback();
+        };
     }, [resumePlayback]);
 
     useEffect(() => {
-        mediaSessionPauseRef.current = pausePlayback;
+        mediaSessionPauseRef.current = () => {
+            if (handleAppleMusicAction('pause')) return;
+            pausePlayback();
+        };
     }, [pausePlayback]);
 
     useEffect(() => {
-        mediaSessionPrevRef.current = handlePrevTrack;
+        mediaSessionPrevRef.current = () => {
+            if (handleAppleMusicAction('previous')) return;
+            handlePrevTrack();
+        };
     }, [handlePrevTrack]);
 
     useEffect(() => {
-        mediaSessionNextRef.current = handleNextTrack;
+        mediaSessionNextRef.current = (options?: never) => {
+            if (handleAppleMusicAction('next')) return Promise.resolve();
+            return handleNextTrack(options);
+        };
     }, [handleNextTrack]);
 
     useEffect(() => {

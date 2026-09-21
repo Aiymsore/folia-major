@@ -6,6 +6,7 @@ import { setPlayerState } from '../stores/usePlaybackStore';
 import { useTranslation } from 'react-i18next';
 import { usePlaybackStore } from '../stores/usePlaybackStore';
 import { currentTime } from '../stores/motionSignals';
+import { handleAppleMusicAction } from './useTransportDispatcher';
 
 // src/hooks/usePlaybackTransportController.ts
 
@@ -66,6 +67,12 @@ export function usePlaybackTransportController({
     const duration = usePlaybackStore(state => state.duration);
 
     const resumePlayback = useCallback(async () => {
+        // Phase 3A: an Apple Music backend owns the transport. `handleAppleMusicAction` returns true
+        // when it has taken the call — either the command was sent, or this backend is active and
+        // the command was deliberately dropped. Either way the Folia body below must not run: it
+        // would start this element for a button the user aimed at Apple Music.
+        if (handleAppleMusicAction('play')) return;
+
         if (isNowPlayingStageActive) {
             return;
         }
@@ -132,6 +139,10 @@ export function usePlaybackTransportController({
     }, [activePlaybackContext, audioContextRef, audioRef, audioSrc, currentTime, duration, getSyntheticStageLyricsTime, getTargetPlaybackVolume, isNowPlayingStageActive, recoverOnlinePlaybackSource, setPlayerState, setStatusMsg, setupAudioAnalyzer, shouldRefreshCurrentOnlineAudioSource, stageActiveEntryKind, stageLyricsClockRef, syncOutputGain, syncStageLyricsClock, t]);
 
     const pausePlayback = useCallback(() => {
+        // Same contract as resumePlayback above: an Apple Music backend takes the pause, and the
+        // Folia deck is left untouched.
+        if (handleAppleMusicAction('pause')) return;
+
         if (isNowPlayingStageActive) {
             return;
         }

@@ -43,6 +43,31 @@ export interface PlaybackSyncBridgeModel {
     sampledAt: number;
 }
 
+/**
+ * Optional overrides that let a non-Folia playback backend publish through this same model.
+ *
+ * Only the fields a backend can genuinely differ on are overridable. `playQueue`, `loopMode`,
+ * `isFmMode` and the window/chrome flags stay Folia's: Apple Music has no Folia queue, and the
+ * window state is the same window either way.
+ *
+ * When this argument is absent the function behaves exactly as it did before the parameter existed —
+ * that equivalence is asserted by test/unit/playbackSyncBridge.test.ts, and it is what makes the
+ * whole Phase 3A rollout safe to land while `activeBackend` is still pinned to 'folia'.
+ */
+export interface PlaybackSyncBridgeEffectiveOverride {
+    currentSong?: SongResult | null;
+    playerState?: PlayerState;
+    hasTrack?: boolean;
+    title?: string | null;
+    artist?: string | null;
+    coverUrl?: string | null;
+    currentTimeSec?: number;
+    durationSec?: number;
+    canGoPrevious?: boolean;
+    canGoNext?: boolean;
+    controlsDisabled?: boolean;
+}
+
 export interface BuildPlaybackSyncBridgeModelArgs {
     activePlaybackContext: PlaybackContext;
     currentSong: SongResult | null;
@@ -70,6 +95,7 @@ export interface BuildPlaybackSyncBridgeModelArgs {
     mainWindowHeight: number;
     lyricOffsetMs?: number;
     sampledAt?: number;
+    effective?: PlaybackSyncBridgeEffectiveOverride;
 }
 
 export interface RemoteControlSnapshotOptions {
@@ -130,41 +156,52 @@ export const buildPlaybackSyncBridgeModel = ({
     mainWindowHeight,
     lyricOffsetMs,
     sampledAt = Date.now(),
+    effective,
 }: BuildPlaybackSyncBridgeModelArgs): PlaybackSyncBridgeModel => {
-    const hasTrack = !isStageActive && Boolean(currentSong);
-    const currentSongKey = currentSong ? getPlaybackSongKey(currentSong) : null;
+    // The effective override is applied per field, and computing the three derived flags against the
+    // OVERRIDDEN song/state is the whole point: an Apple Music track has no Folia queue entry, so
+    // resolving neighbours from the real `playQueue` would report canGoPrevious/Next as false and
+    // grey out the remote's and the taskbar's skip buttons.
+    const effectiveSong = effective?.currentSong !== undefined ? effective.currentSong : currentSong;
+    const effectivePlayerState = effective?.playerState ?? playerState;
+    const hasTrack = !isStageActive && (effective?.hasTrack ?? Boolean(effectiveSong));
+    const currentSongKey = effectiveSong ? getPlaybackSongKey(effectiveSong) : null;
     const currentIndex = currentSongKey
         ? playQueue.findIndex(song => getPlaybackSongKey(song) === currentSongKey)
         : -1;
     const hasQueueNeighbors = playQueue.length > 1;
-    const canGoPrevious = hasTrack && (currentIndex > 0 || (effectiveLoopMode === 'all' && hasQueueNeighbors));
-    const canGoNext = hasTrack && (
-        isFmMode ||
-        currentIndex >= 0 && currentIndex < playQueue.length - 1 ||
-        (effectiveLoopMode === 'all' && hasQueueNeighbors)
-    );
-    const safeCurrentTimeSec = Math.max(0, clampFiniteNumber(currentTimeSec));
-    const safeDurationSec = Math.max(0, clampFiniteNumber(durationSec));
+    const canGoPrevious = effective?.canGoPrevious
+        ?? (hasTrack && (currentIndex > 0 || (effectiveLoopMode === 'all' && hasQueueNeighbors)));
+    const canGoNext = effective?.canGoNext
+        ?? (hasTrack && (
+            isFmMode ||
+            currentIndex >= 0 && currentIndex < playQueue.length - 1 ||
+            (effectiveLoopMode === 'all' && hasQueueNeighbors)
+        ));
+    const safeCurrentTimeSec = Math.max(0, clampFiniteNumber(effective?.currentTimeSec ?? currentTimeSec));
+    const safeDurationSec = Math.max(0, clampFiniteNumber(effective?.durationSec ?? durationSec));
 
     return {
         activePlaybackContext,
-        currentSong,
+        currentSong: effectiveSong,
         playQueue,
         hasTrack,
-        title: currentSong?.name ?? null,
-        artist: resolvePlaybackSongArtist(currentSong),
-        coverUrl: getPlaybackSyncBridgeCoverUrl(currentSong, coverUrl, cachedCoverUrl),
+        title: effective?.title !== undefined ? effective.title : (effectiveSong?.name ?? null),
+        artist: effective?.artist !== undefined ? effective.artist : resolvePlaybackSongArtist(effectiveSong),
+        coverUrl: effective?.coverUrl !== undefined
+            ? effective.coverUrl
+            : getPlaybackSyncBridgeCoverUrl(effectiveSong, coverUrl, cachedCoverUrl),
         currentIndex,
         currentTimeSec: safeCurrentTimeSec,
         stagePositionSec: Math.max(0, clampFiniteNumber(stagePositionSec ?? safeCurrentTimeSec)),
         durationSec: safeDurationSec,
         stageDurationSec: Math.max(0, clampFiniteNumber(stageDurationSec ?? safeDurationSec)),
-        playerState,
+        playerState: effectivePlayerState,
         loopMode: effectiveLoopMode,
         isFmMode,
         canGoPrevious,
         canGoNext,
-        controlsDisabled: controlsDisabled || !hasTrack,
+        controlsDisabled: (effective?.controlsDisabled ?? controlsDisabled) || !hasTrack,
         isStageActive,
         transparentModeEnabled,
         mainWindowClickThroughEnabled,

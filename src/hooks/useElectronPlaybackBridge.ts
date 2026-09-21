@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import type { RefObject } from 'react';
 import type { MotionValue } from 'framer-motion';
@@ -19,6 +19,8 @@ import {
     buildTaskbarControlsFromPlaybackSyncBridge,
 } from '../utils/playbackSyncBridge';
 import { resolveStagePlayerPositionSec } from '../utils/stagePlayerSnapshot';
+import { resolvePlaybackSongArtist } from '../utils/playbackSongMeta';
+import { useEffectivePlaybackModel } from './useEffectivePlayback';
 import { getPlaybackSourceRef } from '../utils/appPlaybackGuards';
 import { omni } from '../services/onlineMusic/omni';
 import { subscribeToTransitionCue } from '../services/automix/transitionCue';
@@ -141,6 +143,30 @@ export const useElectronPlaybackBridge = ({
     const duration = usePlaybackStore(selectDisplayDuration);
     const playerState = usePlaybackStore(selectDisplayPlayerState);
 
+    // Phase 3A: the current playback backend's own facts, shaped as an override for the shared
+    // publisher model. Derived in one place so the taskbar, the remote window and Discord can never
+    // disagree about what is playing. In the 'folia' backend every field below is exactly what the
+    // model would have derived on its own, which is why passing it is safe while the backend is
+    // still pinned to Folia.
+    const effective = useEffectivePlaybackModel();
+    const effectiveOverride = useMemo(() => ({
+        currentSong: effective.song,
+        playerState: effective.playerState,
+        hasTrack: effective.hasTrack,
+        title: effective.song?.name ?? null,
+        artist: effective.song ? resolvePlaybackSongArtist(effective.song) : null,
+        coverUrl: effective.coverUrl,
+        currentTimeSec: effective.positionSec,
+        durationSec: effective.durationSec,
+        // null means "not provided" for the Folia branch: the model keeps its own queue-based rule,
+        // so the skip buttons' enablement is unchanged outside the Apple Music backend. The
+        // conversion is explicit because the override type says `boolean | undefined`, and an
+        // explicitly undefined optional reads the same as an absent one.
+        canGoPrevious: effective.canGoPrevious ?? undefined,
+        canGoNext: effective.canGoNext ?? undefined,
+        controlsDisabled: effective.controlsDisabled ?? undefined,
+    }), [effective]);
+
     const [playbackSyncBridgeStatus, setPlaybackSyncBridgeStatus] = useState<ElectronPlaybackSyncBridgeStatus>(() => emptyPlaybackSyncBridgeStatus());
     const pausedByVoiceInputRef = useRef(false);
     const remoteTrackTransitionRef = useRef<RemoteTrackTransition | null>(null);
@@ -223,7 +249,16 @@ export const useElectronPlaybackBridge = ({
         return Boolean(expectedSource && currentSource && expectedSource === currentSource);
     };
 
-    const buildPlaybackSyncBridgeModelFromCurrentState = () => {
+    // Phase 3A: `includeEffectiveBackend` decides whether this model describes the CURRENT playback
+    // backend (Apple Music included) or strictly Folia.
+    //
+    // The taskbar, the remote-control window and Discord all describe "what the user is listening
+    // to", so they follow the backend. The Stage player snapshot does not: Stage is a Folia surface
+    // with its own source selection, and feeding it Apple Music metadata would publish a track the
+    // Stage controller never asked for. Stage and the Apple Music backend are mutually exclusive by
+    // policy, so this is belt-and-braces rather than a live branch — but it is the kind of coupling
+    // that silently appears later if it is not made explicit now.
+    const buildPlaybackSyncBridgeModelFromCurrentState = (includeEffectiveBackend: boolean) => {
         // The clock the picture belongs to: the outgoing deck during a blend, the active deck the
         // rest of the time. The metadata below is already the held picture (the caller passes
         // `currentSong`/`duration`/`coverUrl` as the displayed track), so reading the active deck's
@@ -270,13 +305,15 @@ export const useElectronPlaybackBridge = ({
             lyricOffsetMs: lyricTimelineOffsetMs,
             mainWindowWidth: window.innerWidth,
             mainWindowHeight: window.innerHeight,
+            // Omitted entirely for the Stage snapshot, so that path stays byte-for-byte Folia.
+            ...(includeEffectiveBackend ? { effective: effectiveOverride } : {}),
         });
     };
 
     const buildRemoteSnapshot = (options: { includeLyrics?: boolean } = {}): RemoteControlSnapshot => {
         return {
             ...buildRemoteControlSnapshotFromPlaybackSyncBridge(
-            buildPlaybackSyncBridgeModelFromCurrentState(),
+            buildPlaybackSyncBridgeModelFromCurrentState(true),
             {
                 includeLyrics: options.includeLyrics,
                 lyrics,
@@ -292,11 +329,15 @@ export const useElectronPlaybackBridge = ({
     };
 
     const buildDiscordPresenceSnapshot = () => {
-        return buildDiscordPresenceSnapshotFromPlaybackSyncBridge(buildPlaybackSyncBridgeModelFromCurrentState());
+        // Deliberately Folia-only for Phase 3A: Discord presence is out of scope for this phase, so it
+        // keeps describing Folia's own playback rather than following the backend. Passing `false`
+        // here is what makes that a decision instead of an accident.
+        return buildDiscordPresenceSnapshotFromPlaybackSyncBridge(buildPlaybackSyncBridgeModelFromCurrentState(false));
     };
 
     const buildCurrentStagePlayerSnapshot = () => {
-        const model = buildPlaybackSyncBridgeModelFromCurrentState();
+        // Strictly Folia: see the note on buildPlaybackSyncBridgeModelFromCurrentState.
+        const model = buildPlaybackSyncBridgeModelFromCurrentState(false);
         const cache = stageSnapshotCacheRef.current;
         if (
             cache &&
@@ -421,7 +462,7 @@ export const useElectronPlaybackBridge = ({
         }
 
         void window.electron.updateTaskbarControls(
-            buildTaskbarControlsFromPlaybackSyncBridge(buildPlaybackSyncBridgeModelFromCurrentState())
+            buildTaskbarControlsFromPlaybackSyncBridge(buildPlaybackSyncBridgeModelFromCurrentState(true))
         ).catch((error) => {
             console.warn('[Electron] Failed to update Windows taskbar controls', error);
         });

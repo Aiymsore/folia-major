@@ -129,6 +129,7 @@ import { useSettingsModalStore } from './stores/useSettingsModalStore';
 import { audioBands, audioPower, bass, currentTime, lowMid, lyricCurrentTime, mid, spectrum, treble, vocal } from './stores/motionSignals';
 import { useAppChromeStore } from './stores/useAppChromeStore';
 import { useAppViewStore } from './stores/useAppViewStore';
+import { startAppleMusicSmtcSubscription } from './stores/useAppleMusicSmtcStore';
 import { selectDisplayCoverUrl, selectDisplayDuration, selectDisplayLyrics, selectDisplayPlayerState, selectDisplaySong, selectIsShowingTail, usePlaybackStore } from './stores/usePlaybackStore';
 import { useLibraryStore } from './stores/useLibraryStore';
 import { countRender } from './dev/renderCount';
@@ -139,6 +140,14 @@ import { useVisualizerTunings } from './components/visualizer/useVisualizerTunin
 import { usePlaybackRuntimeRefs } from './hooks/usePlaybackRuntimeRefs';
 import { useElectronWindowChrome } from './hooks/useElectronWindowChrome';
 import { useTransportCommandRefs } from './hooks/useTransportCommandRefs';
+import { handleAppleMusicSeek } from './hooks/useTransportDispatcher';
+import {
+    useBackendAwarePlaybackActions,
+    useBackendAwareTrackNavigation,
+} from './hooks/useBackendAwarePlaybackActions';
+import { usePlaybackSwitcherEntries } from './hooks/usePlaybackSwitcherEntries';
+import { useEffectivePlaybackModel } from './hooks/useEffectivePlayback';
+import { leaveAppleMusicForStage } from './hooks/usePlaybackBackendSwitch';
 import { useHomeProviderRefresh } from './hooks/useHomeProviderRefresh';
 import { useAudioOutputDevice } from './hooks/useAudioOutputDevice';
 import { useThemeQuickEditorContext } from './hooks/useThemeQuickEditorContext';
@@ -351,6 +360,12 @@ export default function App() {
     // const lastBufferedPercentLogRef = useRef<number | null>(null);
     const [isLyricsLoading, setIsLyricsLoading] = useState(false);
     const isNowPlayingControlDisabledRef = useRef(false);
+
+    // Phase 3A: the one and only Apple Music SMTC subscription. Started here rather than inside a
+    // hook because every consumer must read the same snapshot — a hook would subscribe once per call
+    // site and leave the later ones a frame behind. Idempotent, so a diagnostic surface calling it
+    // too is harmless. While activeBackend is still 'folia' this only fills a store nobody gates on.
+    useEffect(() => startAppleMusicSmtcSubscription(), []);
 
 
     // Navigation persistence state shared by the Grid home surfaces.
@@ -875,6 +890,44 @@ export default function App() {
         navigateToPlayer,
     });
 
+    /**
+     * Phase 3A: the platform menu's entries, built here rather than in Grid3D because selecting
+     * Apple Music has to pause whatever Folia is playing.
+     *
+     * The pause callback is reached through a ref rather than passed directly: `pausePlayback` is
+     * declared further down (the transport controller needs the Stage controller's results first), so
+     * passing it by value here would be a use-before-declaration. The ref is assigned in the same
+     * render, further down, and the callback it holds is only ever invoked from a click — by then it
+     * is always current.
+     *
+     * Everything except the appended Apple Music entry is a straight pass-through of the omni
+     * providers: native provider selection and its confirm dialog are unchanged.
+     */
+    const pauseFoliaForAppleMusicRef = useRef<() => void>(() => {});
+    const pauseFoliaForAppleMusic = useCallback(() => pauseFoliaForAppleMusicRef.current(), []);
+    const playbackSwitcherEntries = usePlaybackSwitcherEntries({
+        providers: onlineProviderPlatform.providers,
+        activeProviderId: onlineProviderPlatform.activeProviderId,
+        switchProvider: onlineProviderPlatform.switchProvider,
+        pauseFolia: pauseFoliaForAppleMusic,
+        isStageActive: isNowPlayingStageActive,
+    });
+
+    /**
+     * Stage entry hand-over. Stage and the Apple Music backend are mutually exclusive, so the backend
+     * is released BEFORE the Stage controller runs: that controller captures a Folia snapshot and
+     * flips `activePlaybackContext` to 'stage', and doing so while Apple Music still owned the
+     * transport is exactly the state the invariant forbids.
+     *
+     * `leaveAppleMusicForStage` is a no-op that sends no command when the backend is already Folia, so
+     * the ordinary Stage path is byte-for-byte unchanged. Nothing inside the Stage controller is
+     * touched — the hand-over happens one level above it.
+     */
+    const openStagePlayerFromUi = useCallback(async () => {
+        leaveAppleMusicForStage();
+        await openStagePlayer();
+    }, [openStagePlayer]);
+
     const {
         restoreStatus: windowPlaybackHandoffRestoreStatus,
         toggleTransparentModeWithHandoff,
@@ -934,8 +987,10 @@ export default function App() {
         createCurrentNavidromePlaylist,
         loadCurrentSongLyricPreview,
         handleLocalQueueAdd,
-        onPlayLocalSong,
-        onPlayNavidromeSong,
+        // Same boundary as the queue controller above: the library controller's own callers keep the
+        // originals; only the user-facing surfaces get the backend-aware wrappers.
+        onPlayLocalSong: onPlayLocalSongRaw,
+        onPlayNavidromeSong: onPlayNavidromeSongRaw,
         handleUpdateLocalLyrics,
         handleChangeLyricsSource,
         handleManualMatchOnline,
@@ -1030,16 +1085,20 @@ export default function App() {
         clearPendingUnavailableSkip,
         addOnlineSongToQueue,
         addOnlineSongsToQueue,
-        playSong,
+        // Renamed at the boundary: these are the untouched controller implementations, which the
+        // queue controller itself keeps calling for its own internal transitions (auto-advance,
+        // failure skip, Stage requests). The backend-aware versions are built below and are only
+        // handed to the user-facing player surfaces.
+        playSong: playSongRaw,
         playOnlineQueueFromStart,
         handleQueueAddAndPlay,
         handleSearchOverlaySubmit,
         handleSearchLoadMore,
-        handleSearchResultPlay,
+        handleSearchResultPlay: handleSearchResultPlayRaw,
         handleSearchResultAddToQueue,
         handleUnavailableReplacementConfirm,
-        handleNextTrack,
-        handlePrevTrack,
+        handleNextTrack: handleNextTrackRaw,
+        handlePrevTrack: handlePrevTrackRaw,
         skipAfterPlaybackFailure,
         handleStageExternalPlayRequest,
         shuffleQueue,
@@ -1057,8 +1116,8 @@ export default function App() {
         persistLastPlaybackCache,
         restoreCachedThemeForSong,
         interruptStagePlaybackForMainTransition,
-        onPlayLocalSong,
-        onPlayNavidromeSong,
+        onPlayLocalSong: onPlayLocalSongRaw,
+        onPlayNavidromeSong: onPlayNavidromeSongRaw,
         onAddLocalSongToQueue: handleLocalQueueAdd,
         onAddNavidromeSongsToQueue: addNavidromeSongsToQueue,
         searchDeps: {
@@ -1076,6 +1135,38 @@ export default function App() {
         lastAudioRecoverySourceRef,
         getDisplaySong,
         endHeldTransition,
+    });
+
+    // Phase 3A: the two user-facing boundaries. Everything the controllers call internally still uses
+    // the originals (`handleNextTrackRaw` and friends), so queue semantics, auto-advance and failure
+    // skipping are untouched; what changes is only what a click on a player control does.
+    //
+    //   1. Starting a Folia song while the Apple Music backend owns the transport claims the backend
+    //      back (best-effort pause first), then runs the original action.
+    //   2. Previous/Next from the player UI reach the Apple Music backend, because those two buttons
+    //      do NOT travel through useTransportCommandRefs (that path only serves mediaSession,
+    //      the taskbar, the remote window and Stage).
+    const {
+        playSong,
+        onPlayLocalSong,
+        onPlayNavidromeSong,
+        handleSearchResultPlay,
+    } = useBackendAwarePlaybackActions({
+        playSong: playSongRaw,
+        onPlayLocalSong: onPlayLocalSongRaw,
+        onPlayNavidromeSong: onPlayNavidromeSongRaw,
+        // Search results have their own entry point into Folia playback, so a click there must claim
+        // the backend too. `claimFoliaBackend` is idempotent, so the wrapper being applied twice on
+        // the paths that end in playSong costs one read and nothing else.
+        handleSearchResultPlay: handleSearchResultPlayRaw,
+    });
+
+    const {
+        handlePrevTrack,
+        handleNextTrack,
+    } = useBackendAwareTrackNavigation({
+        handlePrevTrack: handlePrevTrackRaw,
+        handleNextTrack: handleNextTrackRaw,
     });
     const handleSearchResultArtistOpen = useCallback(async (
         track: UnifiedSong,
@@ -1433,7 +1524,12 @@ export default function App() {
         mediaSessionNextRef,
         taskbarHasTrackRef,
         taskbarPlayerStateRef,
-    } = useTransportCommandRefs({ resumePlayback, pausePlayback, handlePrevTrack, handleNextTrack });
+    } = useTransportCommandRefs({ resumePlayback, pausePlayback, handlePrevTrack: handlePrevTrackRaw, handleNextTrack: handleNextTrackRaw });
+
+    // Backs the placeholder passed to usePlaybackSwitcherEntries above. Assigned during render rather
+    // than in an effect so a click that lands immediately after a re-render always sees the current
+    // transport, and because reading it never happens during rendering.
+    pauseFoliaForAppleMusicRef.current = pausePlayback;
 
     useMediaSessionBridge({
         audioRef,
@@ -1611,6 +1707,9 @@ export default function App() {
     const isNowPlayingControlDisabled = isNowPlayingStageActive;
 
     useElectronWindowChrome();
+    // 当前后端的「有没有可控制曲目」由 effective 模型给出：Folia 的 `audioSrc` 描述不了 Apple Music
+    // （外部进程播放，这个字段恒为 null），只判它会让暂停按钮在 Apple Music 模式下永久置灰。
+    const effectiveHasTrack = useEffectivePlaybackModel().hasTrack;
     const {
         isPlayerView,
         shouldPauseVisualizerBackground,
@@ -1629,12 +1728,14 @@ export default function App() {
         stageActiveEntryKind,
         audioSrc,
         duration,
+        effectiveHasTrack,
     }), [
         activePlaybackContext,
         audioSrc,
         currentView,
         disableHomeDynamicBackground,
         duration,
+        effectiveHasTrack,
         hidePlayerProgressBar,
         hidePlayerRightPanelButton,
         hidePlayerTranslationSubtitle,
@@ -2026,6 +2127,12 @@ export default function App() {
         return true;
     };
     const seekMainAudio = useCallback((time: number) => {
+        // Phase 3A: the Apple Music backend clamps against ITS OWN durationMs and quantizes to whole
+        // seconds. Placed before the transition branch on purpose: `seekDuringTransitionRef` and
+        // `audioRef` both belong to Folia decks, and the Folia body below would also resume playback
+        // — Apple Music's TryChangePlaybackPositionAsync deliberately does not.
+        if (handleAppleMusicSeek(time)) return;
+
         if (seekDuringTransitionRef.current(time)) {
             return;
         }
@@ -2145,7 +2252,10 @@ export default function App() {
         pendingNavidromeSelection,
         setPendingNavidromeSelection,
         stageSource,
-        openStagePlayer,
+        // Phase 3A: the UI entry to Stage goes through the hand-over wrapper, so entering Stage from
+        // an Apple Music backend releases the transport first. The controller's own `openStagePlayer`
+        // is untouched and still used by every non-UI caller.
+        openStagePlayer: openStagePlayerFromUi,
         theme,
         playAll: playOnlineQueueFromStart,
         addAllToQueue: addOnlineSongsToQueue,
@@ -2636,6 +2746,11 @@ export default function App() {
                     {currentView === 'home' || currentView === 'player' ? (
                         <Home
                             model={homeModel}
+                            // Passed beside the memoised model rather than inside it: the entries change
+                            // whenever the SMTC snapshot does, and folding that into `homeModel` would
+                            // invalidate the whole home model (and re-render Home) on every Apple Music
+                            // playback tick.
+                            playbackSwitcherEntries={playbackSwitcherEntries}
                             isHomeFullyHidden={isHomeFullyHidden}
                             isInteractive={shouldShowHomeSurface}
                         />

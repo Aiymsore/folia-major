@@ -3,6 +3,7 @@ import { ChevronRight, LogIn, LogOut, UserRound } from 'lucide-react';
 import { AnimatePresence, motion, useMotionValueEvent } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import type { OnlineProviderId, ProviderAccountSummary } from '../../../types/onlineMusic';
+import type { PlaybackSwitcherEntry } from '../../../types/playbackBackend';
 import { playerBottomBarLiveOffset } from '../../../stores/motionSignals';
 import {
     PLAYER_BOTTOM_BAR_BASE_OFFSET_PX,
@@ -18,6 +19,18 @@ type OnlineProviderSwitcherProps = {
     onSelect: (provider: ProviderAccountSummary) => void;
     onLogout: (provider: ProviderAccountSummary) => void;
     onBackToPlayer: () => void;
+    /**
+     * Phase 3A: the same list with the Apple Music entry appended, plus the backend-aware click
+     * handler. Optional so every other caller keeps working; when it is absent the component renders
+     * exactly what it rendered before.
+     *
+     * Apple Music is a "special platform entry + external playback backend": it reuses this menu's
+     * presentation and position, but it has no providerId, no account, no omni registration and no
+     * login/logout lifecycle — which is why it is a separate discriminated entry rather than an extra
+     * `ProviderAccountSummary`.
+     */
+    switcherEntries?: PlaybackSwitcherEntry[];
+    onSelectEntry?: (entry: PlaybackSwitcherEntry) => void;
 };
 
 // 在线平台使用统一的纯色圆形文字徽章。
@@ -26,6 +39,9 @@ const AVATAR_BADGE_BY_PROVIDER: Record<string, { label: string; iconUrl?: string
     kugou: { label: 'K', className: 'bg-blue-600' },
     qq: { label: 'Q', className: 'bg-green-600' },
 };
+
+/** Apple Music 是一个外部播放后端，不是在线账号：纯色徽章 + 三态文案，没有头像/登录态。 */
+const APPLE_MUSIC_BADGE = { label: '', className: 'bg-gradient-to-br from-rose-500 to-pink-600' };
 
 const ProviderAvatar = ({ provider, className }: { provider: ProviderAccountSummary; className: string }) => {
     const badge = AVATAR_BADGE_BY_PROVIDER[provider.providerId];
@@ -50,6 +66,8 @@ const OnlineProviderSwitcher: React.FC<OnlineProviderSwitcherProps> = ({
     onSelect,
     onLogout,
     onBackToPlayer,
+    switcherEntries,
+    onSelectEntry,
 }) => {
     const { t } = useTranslation();
     const [open, setOpen] = useState(false);
@@ -59,6 +77,20 @@ const OnlineProviderSwitcher: React.FC<OnlineProviderSwitcherProps> = ({
     const previousProviderIdRef = useRef(activeProviderId);
     const activeProvider = providers.find(provider => provider.providerId === activeProviderId) || providers[0];
     const surfaceClass = isDaylight ? 'bg-white text-zinc-900' : 'bg-zinc-950 text-white';
+
+    // Phase 3A: Apple Music reuses this menu's presentation but is a different kind of entry, so it is
+    // rendered by its own branch below rather than through the provider row (which assumes an account,
+    // a login state and a logout action). The trigger button's label/avatar follows whichever entry is
+    // active, so the pill itself reflects "Apple Music" without any provider-side change.
+    const appleMusicEntry = switcherEntries?.find(entry => entry.kind === 'apple-music') ?? null;
+    const isAppleMusicActive = appleMusicEntry?.isActive === true;
+    const appleMusicStatusLabel = !appleMusicEntry
+        ? ''
+        : appleMusicEntry.status === 'connected'
+            ? t('appleMusic.connected')
+            : appleMusicEntry.status === 'not-running'
+                ? t('appleMusic.notRunning')
+                : t('appleMusic.unavailable');
 
     /**
      * 默认高度保留原 CSS（`bottom-4 md:bottom-6`），只有真的产生抬升量时才写内联 bottom。
@@ -148,17 +180,25 @@ const OnlineProviderSwitcher: React.FC<OnlineProviderSwitcherProps> = ({
                     aria-haspopup="menu"
                     aria-expanded={open}
                 >
-                    <ProviderAvatar provider={activeProvider} className="h-9 w-9 shrink-0 rounded-full md:h-10 md:w-10" />
+                    {isAppleMusicActive ? (
+                        <span
+                            aria-label={t('appleMusic.title')}
+                            className={`${APPLE_MUSIC_BADGE.className} flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-black text-white md:h-10 md:w-10`}
+                        >
+                            AM
+                        </span>
+                    ) : (
+                        <ProviderAvatar provider={activeProvider} className="h-9 w-9 shrink-0 rounded-full md:h-10 md:w-10" />
+                    )}
                     <AnimatePresence initial={false}>
-                        {showProviderLabel && (
-                            <motion.span
+                        {showProviderLabel && (                            <motion.span
                                 initial={{ width: 0, opacity: 0 }}
                                 animate={{ width: 'auto', opacity: 1 }}
                                 exit={{ width: 0, opacity: 0 }}
                                 transition={{ duration: 0.2, ease: 'easeOut' }}
                                 className="hidden max-w-16 overflow-hidden whitespace-nowrap text-xs font-semibold md:block"
                             >
-                                {activeProvider.shortName}
+                                {isAppleMusicActive ? t('appleMusic.title') : activeProvider.shortName}
                             </motion.span>
                         )}
                     </AnimatePresence>
@@ -199,7 +239,7 @@ const OnlineProviderSwitcher: React.FC<OnlineProviderSwitcherProps> = ({
                             <span className="text-sm font-semibold">{t('home.backToPlayer')}</span>
                         </button>
                         {providers.map(provider => {
-                            const active = provider.providerId === activeProviderId;
+                            const active = !isAppleMusicActive && provider.providerId === activeProviderId;
                             const configured = provider.availability.configured;
                             return (
                                 <div
@@ -212,6 +252,21 @@ const OnlineProviderSwitcher: React.FC<OnlineProviderSwitcherProps> = ({
                                         aria-checked={active}
                                         disabled={!configured}
                                         onClick={() => {
+                                            // Route through the backend-aware handler when the caller
+                                            // supplies one: selecting any native provider must also hand
+                                            // the transport back to Folia. Falls back to the plain
+                                            // provider switch for callers that do not opt in.
+                                            if (onSelectEntry && switcherEntries) {
+                                                const entry = switcherEntries.find(
+                                                    candidate => candidate.kind === 'provider'
+                                                        && candidate.providerId === provider.providerId,
+                                                );
+                                                if (entry) {
+                                                    onSelectEntry(entry);
+                                                    if (provider.status === 'authenticated') setOpen(false);
+                                                    return;
+                                                }
+                                            }
                                             onSelect(provider);
                                             if (provider.status === 'authenticated') setOpen(false);
                                         }}
@@ -251,6 +306,48 @@ const OnlineProviderSwitcher: React.FC<OnlineProviderSwitcherProps> = ({
                                 </div>
                             );
                         })}
+
+                        {/* Apple Music: 同一个菜单层级的新入口，但它是外部播放后端而不是在线账号。
+                            因此这一行没有 activeProviderId、没有登录态、没有 omni 注册、没有登出按钮 —— 
+                            只有 backend 的选中态与三态可用性。 */}
+                        {appleMusicEntry && onSelectEntry && (
+                            <div
+                                className={`mt-1 flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition-colors ${appleMusicEntry.isActive ? (isDaylight ? 'bg-black/5' : 'bg-white/8') : ''} ${appleMusicEntry.disabledReason ? 'cursor-not-allowed opacity-40' : (isDaylight ? 'hover:bg-black/8' : 'hover:bg-white/12')}`}
+                                data-testid="apple-music-switcher-entry"
+                                data-apple-music-status={appleMusicEntry.status}
+                                data-apple-music-active={appleMusicEntry.isActive ? 'true' : 'false'}
+                            >
+                                <button
+                                    type="button"
+                                    role="menuitemradio"
+                                    aria-checked={appleMusicEntry.isActive}
+                                    disabled={Boolean(appleMusicEntry.disabledReason)}
+                                    onClick={() => {
+                                        onSelectEntry(appleMusicEntry);
+                                        if (!appleMusicEntry.disabledReason) setOpen(false);
+                                    }}
+                                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                                >
+                                    <span
+                                        aria-hidden="true"
+                                        className={`${APPLE_MUSIC_BADGE.className} flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 text-xs font-black text-white ${appleMusicEntry.isActive
+                                            ? (isDaylight ? 'border-zinc-900' : 'border-white')
+                                            : 'border-transparent'}`}
+                                    >
+                                        AM
+                                    </span>
+                                    <span className="min-w-0 flex-1">
+                                        <span className="block truncate text-sm font-semibold">{t('appleMusic.title')}</span>
+                                        <span className="mt-1 block truncate text-xs opacity-65">{appleMusicStatusLabel}</span>
+                                        {appleMusicEntry.disabledReason && (
+                                            <span className="mt-0.5 block truncate text-[11px] opacity-45">
+                                                {t('appleMusic.stageActive')}
+                                            </span>
+                                        )}
+                                    </span>
+                                </button>
+                            </div>
+                        )}
                     </motion.div>
                 )}
             </AnimatePresence>

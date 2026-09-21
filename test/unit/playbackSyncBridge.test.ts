@@ -6,6 +6,7 @@ import {
     buildRemoteControlSnapshotFromPlaybackSyncBridge,
     buildStagePlayerSnapshotFromPlaybackSyncBridge,
     buildTaskbarControlsFromPlaybackSyncBridge,
+    type BuildPlaybackSyncBridgeModelArgs,
 } from '../../src/utils/playbackSyncBridge';
 import { getPlaybackSongKey } from '../../src/utils/appPlaybackGuards';
 
@@ -167,8 +168,7 @@ describe('playbackSyncBridge', () => {
         });
     });
 
-    it('locates the current song by source when numeric ids collide', () => {
-        const localSong = {
+    it('locates the current song by source when numeric ids collide', () => {        const localSong = {
             ...makeSong(-1, 'Local Song'),
             isLocal: true,
             localRef: { songId: 'local-1' },
@@ -211,5 +211,129 @@ describe('playbackSyncBridge', () => {
 
         expect(model.currentIndex).toBe(1);
         expect(model.canGoPrevious).toBe(true);
+    });
+
+    // ---- Phase 3A: the effective override, and the zero-regression lock ----
+    //
+    // The override is how a non-Folia backend (Apple Music) publishes through this same model. The
+    // first test is the reason the whole rollout can land while activeBackend is still pinned to
+    // 'folia': omitting the parameter must be byte-for-byte the old behaviour.
+
+    const baseArgs = (
+        overrides: Partial<BuildPlaybackSyncBridgeModelArgs> = {},
+    ): BuildPlaybackSyncBridgeModelArgs => {
+        const currentSong = makeSong(2, 'Current Song');
+        return {
+            activePlaybackContext: 'main',
+            currentSong,
+            playQueue: [makeSong(1, 'Previous Song'), currentSong, makeSong(3, 'Next Song')],
+            currentTimeSec: 42,
+            durationSec: 180,
+            playerState: PlayerState.PLAYING,
+            coverUrl: null,
+            cachedCoverUrl: null,
+            effectiveLoopMode: 'off' as const,
+            isFmMode: false,
+            isStageActive: false,
+            controlsDisabled: false,
+            transparentModeEnabled: false,
+            mainWindowClickThroughEnabled: false,
+            mainWindowBorderVisible: false,
+            playerChromeHidden: false,
+            exportState,
+            isDaylight: false,
+            isLiked: false,
+            mainWindowWidth: 800,
+            mainWindowHeight: 600,
+            sampledAt: 999,
+            ...overrides,
+        };
+    };
+
+    it('without an override the model is unchanged by the effective parameter existing', () => {
+        // Locks the pre-Phase-3A behaviour: same inputs, same outputs, field by field.
+        expect(buildPlaybackSyncBridgeModel(baseArgs())).toEqual(
+            buildPlaybackSyncBridgeModel(baseArgs({ effective: {} })),
+        );
+    });
+
+    it('an Apple Music override drives every published surface from the SMTC facts', () => {
+        const appleMusicSong = makeSong(-7, 'Apple Music Track');
+        const model = buildPlaybackSyncBridgeModel(baseArgs({
+            // Folia has NOTHING loaded: its own currentSong is null and the queue is empty.
+            currentSong: null,
+            playQueue: [],
+            currentTimeSec: 0,
+            durationSec: 0,
+            playerState: PlayerState.IDLE,
+            effective: {
+                currentSong: appleMusicSong,
+                playerState: PlayerState.PAUSED,
+                hasTrack: true,
+                title: 'Apple Music Track',
+                artist: 'Apple Artist',
+                coverUrl: null,
+                currentTimeSec: 61,
+                durationSec: 240,
+                canGoPrevious: true,
+                canGoNext: true,
+                controlsDisabled: false,
+            },
+        }));
+
+        expect(model.hasTrack).toBe(true);
+        expect(model.playerState).toBe(PlayerState.PAUSED);
+        expect(model.title).toBe('Apple Music Track');
+        expect(model.currentTimeSec).toBe(61);
+        expect(model.durationSec).toBe(240);
+        // The taskbar/remote gates that used to be false solely because Folia had no queue.
+        expect(model.canGoPrevious).toBe(true);
+        expect(model.canGoNext).toBe(true);
+        expect(model.controlsDisabled).toBe(false);
+        expect(buildTaskbarControlsFromPlaybackSyncBridge(model)).toEqual({
+            hasActiveTrack: true,
+            canGoPrevious: true,
+            canGoNext: true,
+            isPlaying: false,
+        });
+        expect(buildRemoteControlSnapshotFromPlaybackSyncBridge(model, {
+            playerChromeVisibilityMode: 'auto-hide',
+        })).toMatchObject({
+            hasTrack: true,
+            title: 'Apple Music Track',
+            artist: 'Apple Artist',
+            currentTime: 61,
+            duration: 240,
+            playerState: PlayerState.PAUSED,
+            controlsDisabled: false,
+        });
+    });
+
+    it('a disconnected Apple Music backend publishes no track at all', () => {
+        // The rule that keeps a stale title off the screen: no valid media means no song, and
+        // `hasTrack: false` must not be accompanied by a lingering title/artist.
+        const model = buildPlaybackSyncBridgeModel(baseArgs({
+            currentSong: null,
+            playQueue: [],
+            playerState: PlayerState.IDLE,
+            effective: {
+                currentSong: null,
+                hasTrack: false,
+                title: null,
+                artist: null,
+                controlsDisabled: true,
+            },
+        }));
+
+        expect(model.hasTrack).toBe(false);
+        expect(model.title).toBeNull();
+        expect(model.artist).toBeNull();
+        expect(model.controlsDisabled).toBe(true);
+        expect(buildTaskbarControlsFromPlaybackSyncBridge(model)).toEqual({
+            hasActiveTrack: false,
+            canGoPrevious: false,
+            canGoNext: false,
+            isPlaying: false,
+        });
     });
 });

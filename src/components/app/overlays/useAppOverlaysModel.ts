@@ -8,19 +8,30 @@ import { useStageSettingsStore } from '../../../stores/useStageSettingsStore';
 import { usePlayerChromeSettingsStore } from '../../../stores/usePlayerChromeSettingsStore';
 import { useTranslation } from 'react-i18next';
 import {
-    selectDisplayCoverUrl,
-    selectDisplayDuration,
     selectDisplayLyrics,
-    selectDisplayPlayerState,
-    selectDisplaySong,
     usePlaybackStore,
 } from '../../../stores/usePlaybackStore';
+import { useEffectivePlaybackModel } from '../../../hooks/useEffectivePlayback';
 import { resolveLikeAvailability } from '../../../utils/playerLikeAvailability';
 import { buildAppOverlaysModel, type AppOverlaysDeps, type AppOverlaysModel } from './buildAppOverlaysModel';
 
 // src/components/app/overlays/useAppOverlaysModel.ts
 
 const MEMORY_MONITOR_SHORTCUT_LABEL = 'Alt+Shift+M';
+
+/**
+ * 生效时长交给 overlay 模型时**不做任何换算**，两个后端共用同一条秒契约：
+ *   * `effective.durationSec` 永远是秒 —— Folia 的 `selectDisplayDuration` 本身就是秒
+ *     （`store.duration` 来自 `HTMLAudioElement.duration`）；Apple Music 的 SMTC `durationMs`
+ *     已在 `buildAppleMusicEffectiveModel` 里 `/ 1000`；
+ *   * 下游 `FloatingPlayerControls` → `ProgressBar` → `formatTime` 也全部按秒，与 motion signal
+ *     `currentTime`（秒）同标尺。
+ *
+ * 这里曾经写成 `* 1000`（并声称模型层要毫秒）：对 Apple Music 把 164s 变成 164000 并显示成
+ * `2733:20`；对 Folia 则只是与 `useEffectivePlayback` 里那处多余的 `/ 1000` 互相抵消，表面看不出
+ * 来 —— 实际是 164s 被当成 164000 秒格式化，进度条分母同时错 1000 倍。
+ */
+export const resolveOverlayDurationSec = (effective: { durationSec: number }): number => effective.durationSec;
 
 /**
  * The overlay model with everything this file can reach on its own already filled in.
@@ -43,17 +54,33 @@ export const useAppOverlaysModel = (deps: AppOverlaysDeps): AppOverlaysModel => 
     const playerControlSlotPrimary = usePlayerChromeSettingsStore(state => state.playerControlSlotPrimary);
     const playerControlSlotSecondary = usePlayerChromeSettingsStore(state => state.playerControlSlotSecondary);
     const handleSetPlayerBottomBarOffset = usePlayerChromeSettingsStore(state => state.handleSetPlayerBottomBarOffset);
+    // Phase 3A: the displayed track, its length, its cover and its transport state now come from the
+    // effective model, so this one seam switches the whole player surface between Folia and Apple
+    // Music. Everything else here (queue, FM mode, stage context, like state) stays Folia's: Apple
+    // Music has no Folia queue, and inventing one would make the panel offer actions that cannot
+    // apply to it.
+    //
+    // `audioSrc` is deliberately still Folia's raw value: it gates the Folia audio path, and in
+    // Apple Music mode nothing drives that element. The per-song UI gates read the effective fields.
     const audioSrc = usePlaybackStore(state => state.audioSrc);
     const playQueue = usePlaybackStore(state => state.playQueue);
     const isFmMode = usePlaybackStore(state => state.isFmMode);
     const activePlaybackContext = usePlaybackStore(state => state.activePlaybackContext);
     // The held picture, not the live one: a blend keeps song, lyrics, duration and cover describing
     // the same track for its whole length. See the note on `coverUrl` above.
-    const displaySong = usePlaybackStore(selectDisplaySong);
+    //
+    // Phase 3A: song / cover / duration / playerState come from the effective model, so this single
+    // seam switches the whole player surface between the two backends. `displayLyrics` stays Folia's
+    // display selector: the Apple Music backend carries no lyrics this phase, and the effective
+    // model reports none rather than the previous track's lines.
     const displayLyrics = usePlaybackStore(selectDisplayLyrics);
-    const displayCoverUrl = usePlaybackStore(selectDisplayCoverUrl);
-    const displayDuration = usePlaybackStore(selectDisplayDuration);
-    const displayPlayerState = usePlaybackStore(selectDisplayPlayerState);
+    const effective = useEffectivePlaybackModel();
+    const displaySong = effective.song;
+    const displayCoverUrl = effective.coverUrl;
+    // 秒进秒出，见 `resolveOverlayDurationSec` 上的单位契约。曾经在这里乘 1000 当成毫秒，
+    // 但 `buildAppOverlaysModel` 的 `duration`、`ProgressBar` 与 `formatTime` 全都按秒使用。
+    const displayDuration = resolveOverlayDurationSec(effective);
+    const displayPlayerState = effective.playerState;
     const playerControlSlotContext = useMemo(() => ({
         onShuffle: deps.shuffleQueue,
         canShuffle: !isFmMode && playQueue.length > 1,

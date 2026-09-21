@@ -2634,6 +2634,13 @@ export default {
     "coverCacheFailed": "元数据已保存，但封面缓存失败；在线地址可用时仍会继续显示封面。",
     "lyricsNotAppliedOtherSaved": "歌词未应用，其他选择已保存。"
   },
+  "appleMusic": {
+    "title": "Apple Music",
+    "connected": "已连接",
+    "notRunning": "Apple Music 未运行",
+    "unavailable": "不可用",
+    "stageActive": "请先退出 Stage 再控制 Apple Music",
+  },
   "navidrome": {
     "title": "Navi",
     "enable": "连接Navidrome (实验性)",
