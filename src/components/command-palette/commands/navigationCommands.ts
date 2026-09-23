@@ -1,5 +1,6 @@
 import type { CommandPaletteCommand } from '../types';
 import { defineCommand, createToggleCommand, createHomeTabCommand } from '../commandFactories';
+import { isAppleMusicLibraryAvailable } from '../../../services/appleMusicService';
 
 // src/components/command-palette/commands/navigationCommands.ts
 // Commands in the `navigation` group: moving between home tabs, the player, and window-level views.
@@ -36,6 +37,16 @@ export const navigationCommands: CommandPaletteCommand[] = [
     createHomeTabCommand('albums', 'Open albums', 'Open albums tab', ['albums', 'album', '专辑']),
     createHomeTabCommand('navidrome', 'Open Navidrome', 'Open Navidrome tab', ['navidrome', 'navi', '服务器']),
     createHomeTabCommand('radio', 'Open radio', 'Open radio tab', ['radio', 'fm', '电台']),
+    // Apple Music's library needs the Electron main process (it owns the session cookie jar), so
+    // the command is gated the same way the tab is rather than only by platform: a browser build
+    // must not offer a destination it cannot render.
+    {
+        ...createHomeTabCommand('appleMusic', 'Open Apple Music', 'Open the Apple Music home tab', [
+            'apple music', 'applemusic', 'am', 'apple', '苹果音乐', '音乐',
+        ]),
+        platform: ['electron'],
+        isAvailable: () => isAppleMusicLibraryAvailable(),
+    },
     {
         id: 'desktop-toggle-remote-control',
         platform: ['electron'],

@@ -1,8 +1,7 @@
 param(
-    # Substring match against SourceAppUserModelId. The Microsoft Store Apple Music package reports
-    # the exact AUMID `AppleInc.AppleMusicWin_nzyj5cx40ttqa!App`; `AppleMusicWin` still matches it if
-    # the package family hash changes, while excluding other Apple publishers (iCloud, Devices).
-    [string]$Match = 'AppleMusicWin',
+    # Substring match against SourceAppUserModelId. The default targets the Chrome tab playing
+    # music.apple.com (the external-media backend's media source).
+    [string]$Match = 'Chrome',
     # Sampling cadence. 100-200 ms is the range under test; the default sits in the middle.
     [ValidateRange(20, 5000)]
     [int]$IntervalMs = 150,

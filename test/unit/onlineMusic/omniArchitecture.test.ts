@@ -24,7 +24,8 @@ describe('Omni architecture boundaries', () => {
             if (forbiddenImport.test(source)) violations.push(file);
         }
         expect(violations).toEqual([]);
-    });
+        // 全量并行下逐文件读源码树会被 CPU 争抢拖过默认 5s 墙钟上限；判据不变，只放宽计时。
+    }, 20000);
 
     it('keeps deleted legacy pages out of the source tree', async () => {
         const legacyFiles = [

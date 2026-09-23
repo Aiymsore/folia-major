@@ -13,7 +13,8 @@ import VisualizerShell from '../VisualizerShell';
 import VisualizerSubtitleOverlay from '../VisualizerSubtitleOverlay';
 import { builtinAvatarImages, type CappellaAvatarImage, resolveCappellaAvatarUrl } from './avatarImages';
 import { createCappellaAgentSenderResolver, type CappellaMessageSender } from './cappellaMessageSenders';
-import { builtinEmoImages } from './emoImages';
+import { resolveEmotionHintForLine, type CappellaEmotionTag } from './cappellaEmotion';
+import { builtinEmoImages, filterEmoImagesByEmotion } from './emoImages';
 
 // src/components/visualizer/cappella/VisualizerCappella.tsx
 // Renders parsercore-timed lyrics as a chat-style cappella conversation.
@@ -159,13 +160,16 @@ const hashString = (input: string) => {
 
 const seededUnit = (...parts: Array<string | number>) => hashString(parts.join('|')) / 0xffffffff;
 
-const pickStableEmoImage = (imagePool: CappellaEmojiImage[], ...seedParts: Array<string | number>) => {
-    if (imagePool.length === 0) {
+// 按情绪提示缩小图片池（通配项恒在，见 filterEmoImagesByEmotion），再做 seeded 稳定选图：
+// 同一首歌 + 同一 seed + 同一 hint → 同一张图，情绪筛选不破坏按曲目确定性。
+const pickStableEmoImage = (imagePool: CappellaEmojiImage[], emotionHint: CappellaEmotionTag | undefined, ...seedParts: Array<string | number>) => {
+    const pool = filterEmoImagesByEmotion(imagePool, emotionHint);
+    if (pool.length === 0) {
         return null;
     }
 
-    const index = Math.floor(seededUnit(...seedParts) * imagePool.length) % imagePool.length;
-    return imagePool[index] ?? imagePool[0];
+    const index = Math.floor(seededUnit(...seedParts) * pool.length) % pool.length;
+    return pool[index] ?? pool[0];
 };
 
 const getEffectiveRenderEndTime = (line: Line, nextLine?: Line) =>
@@ -321,7 +325,7 @@ const buildCappellaMessages = (
 
     if (lines.length === 0) {
         const fallbackEmo = showEmoMessages
-            ? pickStableEmoImage(emoImagePool, 'no-lyrics', titleText, config.sequencing.forceRightEveryLines)
+            ? pickStableEmoImage(emoImagePool, 'normal', 'no-lyrics', titleText, config.sequencing.forceRightEveryLines)
             : null;
         if (fallbackEmo && showEmoMessages) {
             messages.push({
@@ -348,6 +352,8 @@ const buildCappellaMessages = (
     let sideSequenceCursor = 0;
     let nextLeftAvatarCursor = 0;
     let lastLyricSender: CappellaMessageSender | null = null;
+    // 情绪提示按行推进（未命中的行继承上一行，间奏文本天然不命中），随机反应按它筛图。
+    let runningEmotionHint: CappellaEmotionTag | undefined;
     let lyricMessagesSinceRandomEmo = Number.POSITIVE_INFINITY;
     let randomEmoCount = 0;
     const randomEmoCap = Math.floor(lines.length * config.sequencing.maxRandomEmoRatio);
@@ -390,9 +396,12 @@ const buildCappellaMessages = (
             };
         }
 
+        runningEmotionHint = resolveEmotionHintForLine(line.fullText, runningEmotionHint);
+
         const isInterlude = line.fullText === INTERLUDE_TEXT;
+        // 间奏是纯律动空档，固定 vibe 标签；随机反应用该行的情绪提示。
         const emoImage = isInterlude && showEmoMessages
-            ? pickStableEmoImage(emoImagePool, 'interlude', line.startTime, lineIndex)
+            ? pickStableEmoImage(emoImagePool, 'vibe', 'interlude', line.startTime, lineIndex)
             : null;
         const effectiveRenderEndTime = getEffectiveRenderEndTime(line, nextLine);
         if (isInterlude && emoImage && showEmoMessages) {
@@ -430,7 +439,7 @@ const buildCappellaMessages = (
         if (canAppendRandomEmo) {
             const score = seededUnit('random-emo', line.startTime, line.endTime, lineIndex, config.sequencing.randomEmoChance);
             if (score < config.sequencing.randomEmoChance) {
-                const reactionImage = pickStableEmoImage(emoImagePool, 'reaction', line.startTime, line.endTime, lineIndex, sender.side);
+                const reactionImage = pickStableEmoImage(emoImagePool, runningEmotionHint, 'reaction', line.startTime, line.endTime, lineIndex, sender.side);
                 if (reactionImage) {
                     messages.push({
                         id: `emo-reaction-${line.startTime}-${lineIndex}`,
@@ -476,7 +485,7 @@ const buildCappellaMessages = (
             endTime: 0,
             fullText: INTERLUDE_TEXT,
         };
-        const previewEmo = pickStableEmoImage(emoImagePool, 'preview-emo', titleText, lines.length);
+        const previewEmo = pickStableEmoImage(emoImagePool, 'normal', 'preview-emo', titleText, lines.length);
         if (previewEmo) {
             messages.splice(1, 0, {
                 id: 'emo-preview',

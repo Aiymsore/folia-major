@@ -1,7 +1,7 @@
-// test/manual/apple-music-smtc-command-smoke.mjs
+// test/manual/external-media-smtc-command-smoke.mjs
 //
 // Side-effect-free smoke check for the Phase 2 command channel in
-// electron/appleMusicSmtcBridge.cjs: id correlation, the structured failure kinds, timeouts, and
+// electron/externalMediaSmtcBridge.cjs: id correlation, the structured failure kinds, timeouts, and
 // refusing to queue a command for a helper that is not running.
 //
 // Why this exists next to the vitest suite: the vitest run needs Vite to load vitest.config.ts, and
@@ -9,7 +9,7 @@
 // (spawn EPERM). This file needs nothing but `node`, so it is what can actually be run here;
 // `npm test` remains the real gate and this is a convenience, not a replacement.
 //
-// Usage:  node test/manual/apple-music-smtc-command-smoke.mjs
+// Usage:  node test/manual/external-media-smtc-command-smoke.mjs
 
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
@@ -18,8 +18,8 @@ const require = createRequire(import.meta.url);
 const {
   COMMAND_TIMEOUT_MS,
   validateCommandRequest,
-  createAppleMusicSmtcBridge,
-} = require('../../electron/appleMusicSmtcBridge.cjs');
+  createExternalMediaSmtcBridge,
+} = require('../../electron/externalMediaSmtcBridge.cjs');
 
 let failures = 0;
 let checks = 0;
@@ -93,7 +93,7 @@ function responseLine(overrides = {}) {
     id: 'c1',
     command: 'play',
     ok: true,
-    targetAppUserModelId: 'AppleInc.AppleMusicWin_nzyj5cx40ttqa!App',
+    targetAppUserModelId: 'Chrome',
     error: null,
     errorKind: null,
     completedAtMs: 1789471213330,
@@ -104,7 +104,7 @@ function responseLine(overrides = {}) {
 function createHarness() {
   const timers = createTimerHarness();
   let child = null;
-  const bridge = createAppleMusicSmtcBridge({
+  const bridge = createExternalMediaSmtcBridge({
     spawnFn: () => {
       child = createFakeChild();
       return child;
@@ -155,7 +155,7 @@ async function main() {
     equal('reply is the helper response', await pending, {
       ok: true,
       command: 'play',
-      targetAppUserModelId: 'AppleInc.AppleMusicWin_nzyj5cx40ttqa!App',
+      targetAppUserModelId: 'Chrome',
       error: null,
       errorKind: null,
       completedAtMs: 1789471213330,

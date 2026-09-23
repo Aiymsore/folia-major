@@ -1,17 +1,25 @@
 # folia-apple-music-smtc-helper
 
-Windows SMTC helper for Apple Music. Reads the Apple Music session out of the System Media Transport
-Controls (SMTC) surface and reports it to the Electron main process as JSONL events; since Phase 2 it
-also drives that session on request (`play`/`pause`/`toggle-play-pause`/`previous`/`next`/`seek`).
-Spawned and supervised by `electron/appleMusicSmtcBridge.cjs`.
+Windows SMTC helper for the external-media backend. Reads the **matched media session** — by default
+the Chrome tab playing music.apple.com, because that is the only place full tracks can play — out of
+the System Media Transport Controls (SMTC) surface and reports it to the Electron main process as
+JSONL events; since Phase 2 it also drives that session on request (`play`/`pause`/`toggle-play-pause`/
+`previous`/`next`/`seek`).
+Spawned and supervised by `electron/externalMediaSmtcBridge.cjs`.
+
+The binary name is historical (this crate was written when the target was the Windows Apple Music
+desktop app). Nothing addresses that app any more: it cannot play a track by id, which is what the
+external-media backend needs. Folia's own `MediaCommand` surface is narrower than this helper's —
+Folia never sends `previous`/`next`/queue verbs (Folia's queue resolves "next" into
+`playById(下一首)`); those verbs remain here only for manual SMTC probing.
 
 Two properties of the command path are load-bearing:
 
-- Commands are addressed to the Apple Music session by AUMID, resolved on demand. There is no fallback
-  to the OS "current session" and no fallback to any other player: with no Apple Music session the
+- Commands are addressed to the matched session by AUMID, resolved on demand. There is no fallback
+  to the OS "current session" and no fallback to any other player: with no matching session the
   command fails with `session-not-found` and reports **no target**. Verified behaviour on Windows 11
-  26200 is that Apple Music answers `Try*` calls even while it is not the current media session, so
-  "not current" must never be read as "not targetable".
+  26200 is that a media session answers `Try*` calls even while it is not the current media session,
+  so "not current" must never be read as "not targetable".
 - Every failure is a structured value, never an exception: `ok`, `errorKind` and the target AUMID are
   always present, and the process exit code mirrors `ok` (0 / 3).
 
@@ -34,7 +42,7 @@ stdout is JSONL, one event per line, flushed immediately:
 | ------------ | ----------------------------------------------------------------------------------- |
 | `ready`      | `{"sessionCount":n}` — emitted once, after the session manager is obtained           |
 | `snapshot`   | the session fields below                                                             |
-| `no-session` | no Apple Music session is currently visible                                          |
+| `no-session` | no matching media session is currently visible                                       |
 | `heartbeat`  | liveness marker, emitted on the heartbeat interval when nothing else changes          |
 | `response`   | the result of one stdin command, keyed by the request's `id`                          |
 | `stopped`    | clean shutdown                                                                       |
@@ -48,16 +56,30 @@ A snapshot carries a fixed key set; absent values are `null` rather than an omit
 consumer never has to probe for a field:
 
 ```json
-{"event":"snapshot","sourceAppUserModelId":"AppleInc.AppleMusicWin_nzyj5cx40ttqa!App",
+{"event":"snapshot","sourceAppUserModelId":"Chrome",
  "title":"MaringCode","artist":"…","album":null,"playbackStatus":"Playing",
- "positionMs":13000,"durationMs":218000,"hasThumbnail":true,"updatedAtMs":1789471213330}
+ "positionMs":13000,"durationMs":218000,"hasThumbnail":true,"updatedAtMs":1789471213330,
+ "lastUpdatedMs":1789471213000}
 ```
+
+Two timestamps, and the difference is load-bearing:
+
+- `updatedAtMs` — when the helper captured this snapshot.
+- `lastUpdatedMs` — when the **reported position** was established, straight from the OS's
+  `TimelineProperties.LastUpdatedTime`. This is what lets a consumer measure how stale
+  `lastUpdatedMs` is instead of guessing: the source player quantizes the position to whole seconds and
+  republishes the timeline about every 250 ms, so the value read at any instant may be up to one
+  republish period old. `null` when the timeline could not be read.
+
+`lastUpdatedMs` is deliberately **excluded from the content-equality gate** (same rule as
+`updatedAtMs`): the OS re-stamps it ~3.6 times per second of position, so including it would emit a
+snapshot for every republish and turn the change-gated stream into a much faster one.
 
 A response carries the same fixed-key rule:
 
 ```json
 {"event":"response","id":"c1","command":"play","ok":true,
- "targetAppUserModelId":"AppleInc.AppleMusicWin_nzyj5cx40ttqa!App",
+ "targetAppUserModelId":"Chrome",
  "error":null,"errorKind":null,"completedAtMs":1789564593832}
 ```
 
@@ -65,7 +87,7 @@ A response carries the same fixed-key rule:
 
 | kind                   | meaning                                                                       |
 | ---------------------- | ----------------------------------------------------------------------------- |
-| `session-not-found`    | no Apple Music session is visible; **nothing was controlled**                  |
+| `session-not-found`    | no matching session is visible; **nothing was controlled**                        |
 | `controller-declined`  | the `Try*` call resolved `false` — the session would not do it right now        |
 | `transport-error`      | the `Try*` call itself failed                                                  |
 | `unsupported-command`  | the command name is not one of the six                                         |
@@ -74,10 +96,13 @@ A response carries the same fixed-key rule:
 
 Field notes that come from measured Windows behaviour rather than preference:
 
-- `title`/`artist`/`album` collapse empty and whitespace-only to `null`. Apple Music reports an
-  **empty `AlbumTitle`**, and a consumer cannot act on the difference between `""` and absent.
-- `positionMs`/`durationMs` are integers in milliseconds. Apple Music **quantizes the position to
-  whole seconds** and republishes its timeline roughly every 280 ms, so the value moves in 1000 ms
+- `title`/`artist`/`album` collapse empty and whitespace-only to `null`. Measured behaviour on the
+  Windows SMTC surface (originally with the Apple Music app) is an **empty `AlbumTitle`**, and a
+  consumer cannot act on the difference between `""` and absent.
+- `positionMs`/`durationMs` are integers in milliseconds. The position as reported is **quantized to
+  whole seconds** (measured with the Windows Apple Music app; Chromium's SMTC session is treated as
+  potentially similar until measured otherwise — which is why Folia keeps its clock-correction layer)
+  and the timeline republishes roughly every 280 ms, so the value moves in 1000 ms
   steps; a `seek` therefore lands on a second boundary. Other SMTC sources report sub-millisecond
   values. The protocol keeps milliseconds as the unit and leaves it to the consumer to decide how much
   precision to trust — do not assume the position can anchor word-by-word lyric sync.
@@ -102,15 +127,20 @@ folia-apple-music-smtc-helper command --command-sequence [--match <aumid>]
 
 `watch` is the long-lived event stream the bridge supervises:
 
-- `--interval` (default 500) — poll period. Apple Music moves its position about once a second, so
-  500 ms catches every change while leaving the process idle most of the time.
+- `--interval` (default 250) — poll period. The position cannot get finer than whole seconds
+  (that is the source player's quantization, not our sampling rate), but the OS republishes the timeline
+  roughly every 280 ms, so 250 ms samples every republish. At the previous 500 ms default the helper
+  skipped about half of them, which made the forwarded `lastUpdatedMs` up to ~750 ms old instead of
+  ~250 ms — and a stale stamp is exactly what a consumer uses to decide how much to trust the
+  position. The process is still idle most of the time.
 - `--heartbeat` (default 3000) — liveness period. A healthy stream is mostly change-driven; the
   heartbeat only proves the loop is running when nothing changes.
-- `--match` (default `AppleMusicWin`) — case-insensitive substring matched against each session's
-  AUMID, shared by reads and commands. The Store package reports
-  `AppleInc.AppleMusicWin_nzyj5cx40ttqa!App`; matching a substring rather than the full AUMID survives
-  a package-family hash change while excluding other Apple publishers. Override it to target a renamed
-  package or an iTunes build.
+- `--match` (default `Chrome`) — case-insensitive substring matched against each session's
+  AUMID, shared by reads and commands. The default targets the Chrome tab playing music.apple.com;
+  matching a substring rather than the full AUMID survives channel and profile suffixes (`Chrome`,
+  `Chrome Beta`, `chrome.exe`, package-identity AUMIDs) while excluding other browsers and players.
+  Folia overrides the default through `FOLIA_EXTERNAL_MEDIA_SMTC_MATCH` (see
+  `electron/externalMediaSmtcBridge.cjs`), so another browser channel is a setting, not a rebuild.
 - `--once` — one read, one event, exit.
 - `--iterations <n>` — stop after `n` poll cycles (0 = unbounded). An explicit bound is authoritative
   and is checked before the stdin stop flag, because a redirected stdin reaches EOF immediately and

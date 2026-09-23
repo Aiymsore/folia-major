@@ -33,6 +33,8 @@ export const useThemeQuickEditorContext = ({
     restoreCachedThemeForSong,
 }: ThemeQuickEditorContextParams) => {
     const currentSong = usePlaybackStore(state => state.currentSong);
+    // 刻意直读 raw：主题快捷编辑器的上下文以 Folia 的 currentSong 为身份（isPureMusic / songTitle
+    // 都从这里取），歌词必须与它同源。
     const lyrics = usePlaybackStore(state => state.lyrics);
     const isDaylight = useThemeSettingsStore(state => state.isDaylight);
     const setThemeQuickEditorContext = useThemeQuickEditorStore(state => state.setContext);

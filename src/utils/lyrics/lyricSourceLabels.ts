@@ -11,6 +11,7 @@ export const getBaseLyricProviderLabel = (source: Exclude<LyricProviderSource, '
 
 export const getAmllDbPlatformLabel = (platform?: AmllDbPlatform | null): string => {
     if (platform === 'qq') return i18n.t('lyricProvider.qq');
+    if (platform === 'am') return i18n.t('appleMusic.title');
     return i18n.t('lyricProvider.netease');
 };
 

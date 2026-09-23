@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { calculateMatchScore, calculateMatchScoreDetails, normalizeLyricMatchText } from '@/utils/lyrics/matchScore';
+import {
+    calculateMatchScore,
+    calculateMatchScoreDetails,
+    isCrossScriptArtistPair,
+    normalizeLyricMatchText,
+} from '@/utils/lyrics/matchScore';
 
 // test/unit/lyrics/matchScore.test.ts
 
@@ -70,10 +75,14 @@ describe('calculateMatchScore', () => {
         );
 
         expect(details.titleMatched).toBe(true);
-        expect(details.artistMatched).toBe(false);
         expect(details.albumMatched).toBe(true);
         expect(details.durationMatched).toBe(true);
         expect(details.score).toBeGreaterThanOrEqual(75);
+        // The artist field here is a seiyuu list against the unit name — Han-vs-Latin, so it cannot be
+        // compared and is now neutral rather than a contradiction (see isCrossScriptArtistPair).
+        // That a *judgeable* artist mismatch still sinks a candidate is locked by the
+        // "same-title same-duration candidates below the threshold" case above.
+        expect(details.artistMatched).toBe(true);
     });
 
     it('treats parenthesized title translations as aliases but keeps version markers significant', () => {
@@ -209,6 +218,94 @@ describe('calculateMatchScore', () => {
         expect(details.titleMatched).toBe(true);
         expect(details.artistMatched).toBe(true);
         expect(details.score).toBeGreaterThanOrEqual(95);
+    });
+
+    // ── 缺失时长不再扣分 ──────────────────────────────────────────────────────────
+    //
+    // 回归的现场：`calculateDurationScore` 在任一侧没有时长时返回 0.9，于是一次完美的
+    // title+artist 命中只拿 90 分。对 provider 不报时长的曲目，这 10 分是白扣的 ——
+    // 它是"无法比较"，不是"不匹配"。
+    describe('a duration neither side could report', () => {
+        const perfectMatch = (durationMs: number, searchDurationMs: number) => calculateMatchScoreDetails(
+            { title: 'Aimer Song', artist: 'Aimer', durationMs },
+            {
+                id: 701,
+                name: 'Aimer Song',
+                artists: [{ id: 1, name: 'Aimer' }],
+                album: { id: 1, name: 'Album' },
+                durationMs: searchDurationMs,
+            },
+        );
+
+        it('costs nothing when both sides are missing it', () => {
+            const details = perfectMatch(0, 0);
+            expect(details.durationMultiplier).toBe(1);
+            // Still reported as "not compared" rather than as a verified match.
+            expect(details.durationMatched).toBeNull();
+            expect(details.score).toBe(100);
+        });
+
+        it('costs nothing when only the target is missing it', () => {
+            // SMTC 常常报不出时长，而 provider 报了 —— 同样无法比较。
+            expect(perfectMatch(0, 200_000).durationMultiplier).toBe(1);
+            expect(perfectMatch(0, 200_000).durationMatched).toBeNull();
+        });
+
+        it('costs nothing when only the candidate is missing it', () => {
+            expect(perfectMatch(200_000, 0).durationMultiplier).toBe(1);
+            expect(perfectMatch(200_000, 0).durationMatched).toBeNull();
+        });
+
+        it('still penalizes a length that was reported and disagrees', () => {
+            // 真正的"不匹配"必须继续扣分：这是时长唯一的用处。
+            expect(perfectMatch(200_000, 245_000).score).toBeLessThan(75);
+        });
+    });
+
+    // ── 跨文字系统的艺人名 ────────────────────────────────────────────────────────
+    //
+    // 实测：Apple Music 报罗马字、中文库存汉字名时，同一个艺人对不上。
+    //   target "林ゆうき" vs search "Yuki Hayashi" -> 67 分，artistMatched false
+    // 假名一侧本来就通（wanakana 把两边都归一到罗马字，88 分），缺的是汉字 —— 汉字没有读音
+    // 信息，转写解决不了。这类比较做不了，就不该被当成"不匹配"。
+    describe('a CJK-only artist against a Latin-only one', () => {
+        const details = (targetArtist: string, searchArtist: string, targetTitle = 'Song Title', searchTitle = 'Song Title') => (
+            calculateMatchScoreDetails(
+                { title: targetTitle, artist: targetArtist, durationMs: 200_000 },
+                {
+                    id: 801,
+                    name: searchTitle,
+                    artists: [{ id: 1, name: searchArtist }],
+                    album: { id: 1, name: 'Album' },
+                    durationMs: 200_000,
+                },
+            )
+        );
+
+        it('identifies the pair as unjudgeable', () => {
+            expect(isCrossScriptArtistPair('林ゆうき', 'Yuki Hayashi')).toBe(true);
+            expect(isCrossScriptArtistPair('Yuki Hayashi', '林ゆうき')).toBe(true);
+            // Mixed strings share characters with both worlds, so they are compared normally.
+            expect(isCrossScriptArtistPair('Mili (ミリー)', 'Mili')).toBe(false);
+            expect(isCrossScriptArtistPair('Aimer', 'Aimer')).toBe(false);
+            // Kana is phonetic: wanakana romanizes it, so a kana-vs-romaji pair IS comparable and must
+            // not be handed the neutral artist point. Treating kana as "CJK" here was a real bug.
+            expect(isCrossScriptArtistPair('トゲナシトゲアリ', 'TOGENASHI TOGEARI')).toBe(false);
+            expect(isCrossScriptArtistPair('ルルティア', 'RURUTIA')).toBe(false);
+        });
+
+        it('clears the threshold instead of failing on a comparison it cannot make', () => {
+            const result = details('林ゆうき', 'Yuki Hayashi');
+            expect(result.artistMatched).toBe(true);
+            expect(result.score).toBeGreaterThanOrEqual(75);
+        });
+
+        it('only relaxes under a near-exact title', () => {
+            // 这是不让"跨文字即放行"变成白名单的关键：标题不像就不放宽。
+            const result = details('林ゆうき', 'Yuki Hayashi', 'Completely Different Song', 'Another Song Entirely');
+            expect(result.artistMatched).toBe(false);
+            expect(result.score).toBeLessThan(75);
+        });
     });
 });
 

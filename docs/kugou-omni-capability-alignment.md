@@ -40,8 +40,8 @@
 
 | Omni 能力 | 当前状态 | 原因与影响 |
 | --- | --- | --- |
-| 歌曲可用性与版权替代 | 未实现 | 文档中没有与 `getAvailability`、`getReplacement` 对应的酷狗接口；当前播放失败只能返回无音源，不能像网易云一样获取版权替代歌曲。 |
-| 歌曲页面 URL | 未实现 | Omni 暴露了 `getSongPageUrl`，但接口文档没有稳定的歌曲详情页 URL 约定，当前没有为酷狗拼接未经验证的链接。 |
+| 歌曲可用性与版权替代 | **不做（2026-09-23 定案）** | 文档中没有与 `getAvailability`、`getReplacement` 对应的酷狗接口；播放失败只能返回无音源，不能像网易云一样获取版权替代歌曲。原记「未实现」，现经用户拍板定案不做；要恢复就在 `src/services/onlineMusic/kugouProvider.ts` 实现 `playback.getAvailability` / `playback.getReplacement`。 |
+| 歌曲页面 URL | **不做（2026-09-23 定案）** | Omni 暴露了 `getSongPageUrl`，但接口文档没有稳定的歌曲详情页 URL 约定，不为酷狗拼接未经验证的链接。原记「未实现」，现经用户拍板定案不做；要恢复就在 `src/services/onlineMusic/kugouProvider.ts` 实现 `getSongPageUrl`。 |
 
 ## 非阻塞说明
 

@@ -13,11 +13,11 @@ import { useVisualizerSettingsStore } from '../../stores/useVisualizerSettingsSt
 import { useVisualizerAssetStore } from '../../stores/useVisualizerAssetStore';
 import {
     selectDisplayCoverUrl,
-    selectDisplayLyrics,
     selectDisplayPlayerState,
     selectDisplaySong,
     usePlaybackStore,
 } from '../../stores/usePlaybackStore';
+import { useDisplayLyrics } from '../../hooks/useDisplayLyrics';
 import { getSongAlbumLabel, getSongArtistLabel } from '../../services/onlineMusic/songMetadata';
 import { useVisualizerBackgroundConfig } from './useVisualizerBackgroundConfig';
 import { useVisualizerTunings } from './useVisualizerTunings';
@@ -91,7 +91,7 @@ export const useVisualizerRendererModel = ({
     // The held picture throughout: song, lyrics, cover and transport must describe one track for the
     // whole length of a blend.
     const displaySong = usePlaybackStore(selectDisplaySong);
-    const displayLyrics = usePlaybackStore(selectDisplayLyrics);
+    const displayLyrics = useDisplayLyrics();
     const displayCoverUrl = usePlaybackStore(selectDisplayCoverUrl);
     const displayPlayerState = usePlaybackStore(selectDisplayPlayerState);
     const backgroundConfig = useVisualizerBackgroundConfig();

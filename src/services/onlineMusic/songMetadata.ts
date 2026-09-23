@@ -2,6 +2,7 @@ import type { SongResult } from '../../types';
 import type { OnlineProviderId, ProviderSongMetadata } from '../../types/onlineMusic';
 import { getPlaybackSourceRef } from '../../utils/appPlaybackGuards';
 import { createProviderSongMetadata } from '../../utils/songMetadata';
+import { readAppleMusicSongPayload } from '../appleMusicService';
 import { getOnlineMusicProvider } from './providerRegistry';
 
 // src/services/onlineMusic/songMetadata.ts
@@ -45,6 +46,12 @@ export const getSongCoverUrl = (song: SongResult | null | undefined, providerId?
 
 export const getProviderSongPageUrl = (song: SongResult | null | undefined, providerId?: OnlineProviderId): string | null => {
     if (!song) return null;
+    // Apple Music has no provider to ask, but it does have its own deep link, and that link is
+    // the only way to hear the full track (previews are 90s and full audio is DRM-protected).
+    // Returning it here means every existing "open the song's page" affordance works unchanged.
+    const externalMediaUrl = readAppleMusicSongPayload(song)?.url;
+    if (externalMediaUrl) return externalMediaUrl;
+
     const sourceRef = getPlaybackSourceRef(song);
     const provider = getOnlineMusicProvider(providerId || (sourceRef.kind === 'online' ? sourceRef.providerId : ''));
     return provider?.getSongPageUrl?.(song) || null;

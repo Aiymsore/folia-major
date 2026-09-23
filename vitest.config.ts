@@ -15,6 +15,11 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['test/unit/**/*.test.ts']
+    include: ['test/unit/**/*.test.ts'],
+    // 全量跑时 ~370 个文件互相争抢 CPU，几条重测试（源码树扫描、fake-IndexedDB 迁移、
+    // 上千文件散列）在默认 5s 墙钟下会被拖超时——单跑都远低于 5s。放宽墙钟上限不改任何判据，
+    // 只是不让并行度决定哪些测试红。
+    testTimeout: 20000,
+    hookTimeout: 20000,
   }
 });

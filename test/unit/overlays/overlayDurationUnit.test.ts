@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { motionValue } from 'framer-motion';
 import { PlayerState, type SongResult } from '../../../src/types';
 import {
-    buildAppleMusicEffectiveModel,
+    buildExternalMediaEffectiveModel,
     buildFoliaEffectiveModel,
-    type AppleMusicEffectiveInput,
+    type ExternalMediaEffectiveInput,
 } from '../../../src/utils/effectivePlayback';
 import { buildAppOverlaysModel } from '../../../src/components/app/overlays/buildAppOverlaysModel';
 import { resolveOverlayDurationSec } from '../../../src/components/app/overlays/useAppOverlaysModel';
@@ -34,7 +34,7 @@ const foliaSong: SongResult = {
     durationMs: DURATION_MS,
 };
 
-const appleMusicInput = (overrides: Partial<AppleMusicEffectiveInput> = {}): AppleMusicEffectiveInput => ({
+const appleMusicInput = (overrides: Partial<ExternalMediaEffectiveInput> = {}): ExternalMediaEffectiveInput => ({
     bridgeAvailable: true,
     connected: true,
     hasMedia: true,
@@ -94,7 +94,7 @@ describe('duration 单位契约：effective 模型是秒', () => {
     });
 
     it('Apple Music：把 SMTC 的 durationMs 换算成秒', () => {
-        const model = buildAppleMusicEffectiveModel(appleMusicInput(), 'connected', 'AppleInc.AppleMusicWin');
+        const model = buildExternalMediaEffectiveModel(appleMusicInput(), 'ready', 'Chrome');
 
         expect(model.durationSec).toBe(DURATION_SEC);
         expect(model.durationSec).not.toBe(DURATION_MS);
@@ -112,7 +112,7 @@ describe('duration 单位契约：effective 模型是秒', () => {
             canGoNext: true,
             controlsDisabled: false,
         });
-        const appleMusic = buildAppleMusicEffectiveModel(appleMusicInput(), 'connected', 'AppleInc.AppleMusicWin');
+        const appleMusic = buildExternalMediaEffectiveModel(appleMusicInput(), 'ready', 'Chrome');
 
         expect(folia.durationSec).toBe(appleMusic.durationSec);
     });
@@ -121,13 +121,13 @@ describe('duration 单位契约：effective 模型是秒', () => {
 describe('duration 单位契约：overlay 出口不再换算', () => {
     it('overlay 时长与 effective.durationSec 完全相同', () => {
         // 回归保护点：`useAppOverlaysModel` 曾经在这里 `* 1000`,得到 164000。
-        const model = buildAppleMusicEffectiveModel(appleMusicInput(), 'connected', 'AppleInc.AppleMusicWin');
+        const model = buildExternalMediaEffectiveModel(appleMusicInput(), 'ready', 'Chrome');
 
         expect(resolveOverlayDurationSec(model)).toBe(DURATION_SEC);
     });
 
     it('164 秒不会被折算成毫秒的数', () => {
-        const model = buildAppleMusicEffectiveModel(appleMusicInput(), 'connected', 'AppleInc.AppleMusicWin');
+        const model = buildExternalMediaEffectiveModel(appleMusicInput(), 'ready', 'Chrome');
 
         // 不写成 `expect(overlayDuration).not.toBe(...)` 的具体值:这里要钉的是量级。
         expect(resolveOverlayDurationSec(model)).toBeLessThan(DURATION_MS);
@@ -145,7 +145,7 @@ describe('duration 单位契约：overlay 出口不再换算', () => {
             canGoNext: true,
             controlsDisabled: false,
         });
-        const appleMusic = buildAppleMusicEffectiveModel(appleMusicInput(), 'connected', 'AppleInc.AppleMusicWin');
+        const appleMusic = buildExternalMediaEffectiveModel(appleMusicInput(), 'ready', 'Chrome');
 
         expect(resolveOverlayDurationSec(folia)).toBe(resolveOverlayDurationSec(appleMusic));
         expect(resolveOverlayDurationSec(folia)).toBe(DURATION_SEC);

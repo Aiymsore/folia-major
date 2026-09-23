@@ -38,6 +38,8 @@ export function useSongThemeAutoGeneration({
     generateAITheme,
 }: UseSongThemeAutoGenerationParams) {
     const currentSong = usePlaybackStore(state => state.currentSong);
+    // 刻意直读 raw：主题自动生成以 `currentSong` 为身份键（songKey）并把 song + lyrics 一起
+    // 交给生成器。两半必须同源，否则会「用 Folia 的曲目 + Apple Music 的歌词」生成主题。
     const lyrics = usePlaybackStore(state => state.lyrics);
 
     const requiresPromptSource = themeGenerationSource !== 'cover';

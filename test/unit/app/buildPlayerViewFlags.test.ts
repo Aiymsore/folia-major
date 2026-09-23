@@ -10,7 +10,7 @@ import { buildPlayerViewFlags } from '../../../src/components/app/presentation/b
 // 而 `audioSrc` 是 Folia 的音源字段，Apple Music 是外部进程播放，它在那里恒为 null —— 于是即使
 // backend 已经切到 apple-music（`data-apple-music-active="true"`、行高亮、胶囊变 AM），暂停键依然是
 // 灰的：`FloatingPlayerControls` 的 `disabled={!canTogglePlay}` 把点击挡住，永远到不了已经写好的
-// `handleAppleMusicAction('toggle')`。这里把两个后端的判据分开断言，防止再退回单一 audioSrc。
+// `handleExternalMediaAction('toggle')`。这里把两个后端的判据分开断言，防止再退回单一 audioSrc。
 
 const baseInput = (overrides: Partial<Parameters<typeof buildPlayerViewFlags>[0]> = {}) => ({
     currentView: 'player',

@@ -62,6 +62,13 @@ const createAnalysisHost = ({ app, ipcMain, getModelsDirs, deadlines = DEADLINE_
      * the worker as an env flag at fork time; see `spawn`.
      */
     let forceCpu = false;
+    /**
+     * The listener's own "beat_this on CPU" switch (useAutomixSettingsStore). Same env flag as the
+     * demotion above - one provider decision, two reasons to make it. Unlike `forceCpu` it is
+     * reversible and it is set proactively (zero GPU use for gaming), so it is pushed over IPC and
+     * restarts the worker to take effect on the next fork.
+     */
+    let userForceCpu = false;
 
     const stop = () => {
         if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -97,8 +104,9 @@ const createAnalysisHost = ({ app, ipcMain, getModelsDirs, deadlines = DEADLINE_
             // instead of an anonymous Utility PID. Ignored by Electron if unsupported.
             serviceName: 'folia-analysis',
             // env defaults to a copy of process.env only when omitted; once we pass it we must carry
-            // the parent's own across. The flag is what makes a GPU demotion outlive the kill.
-            env: forceCpu ? { ...process.env, FOLIA_ANALYSIS_FORCE_CPU: '1' } : { ...process.env },
+            // the parent's own across. The flag is what makes a GPU demotion outlive the kill, and what
+            // the listener's beat_this-CPU switch rides on.
+            env: (userForceCpu || forceCpu) ? { ...process.env, FOLIA_ANALYSIS_FORCE_CPU: '1' } : { ...process.env },
         });
         child = started;
 
@@ -188,6 +196,17 @@ const createAnalysisHost = ({ app, ipcMain, getModelsDirs, deadlines = DEADLINE_
      * two stats, and the answer is expected to CHANGE within a session, the whole point of a download button.
      */
     ipcMain.handle('automix-models-present', () => modelsPresent(modelsDirs()));
+
+    // The listener's beat_this-CPU switch. Restarting is the only way to change a running worker's
+    // provider choice (it took its world as argv/env at fork), and that is cheap: stop() is what the
+    // idle timer does anyway, any in-flight request retries once against the fresh worker.
+    ipcMain.on('automix-beat-this-cpu-only', (_event, value) => {
+        const next = Boolean(value);
+        if (next === userForceCpu) return;
+        console.log(`[analysis] beat_this forced to CPU: ${next}`);
+        userForceCpu = next;
+        stop();
+    });
 
     // Renderer stage marks - the automix session's own timeline, which is worth having beside the
     // worker's lines rather than only in the renderer's console buffer. See services/automix/diag.ts.

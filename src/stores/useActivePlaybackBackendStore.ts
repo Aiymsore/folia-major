@@ -10,8 +10,13 @@ import type { PlaybackBackend } from '../types/playbackBackend';
 //   * 本 store 会被非渲染路径读取（taskbar / remote / Stage 的 IPC 回调），必须能用
 //     `useActivePlaybackBackendStore.getState()` 直读，而不是从 React context 里取。
 //
-// 唯一写入入口是 setActiveBackend，且**只有用户的显式选择**能调用它：
+// 唯一写入入口是 setActiveBackend，且**只有用户的显式操作**能调用它：
 // 任何 SMTC 状态变化（Playing/Paused/切歌/位置）都不得修改它 —— 这是产品决策，不是实现细节。
+//
+// 「显式操作」包含两个：平台选择器里选 Apple Music / 原生平台（usePlaybackSwitcherEntries），
+// 以及**点击一首外部媒体曲目**（useBackendAwarePlaybackActions）。后者不是自动抢占：那一首在
+// Folia 里没有音频源，用户点它就是在要求外部播放器播放，认领后端是该意图的必要部分。见
+// utils/playbackBackendClaim.ts。
 
 type ActivePlaybackBackendStore = {
     activeBackend: PlaybackBackend;

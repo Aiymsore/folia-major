@@ -6,6 +6,7 @@ import type { ProviderCollection } from '../../types/onlineMusic';
 import PlaylistSelectionDialog from '../shared/PlaylistSelectionDialog';
 import TextInputDialog from '../shared/TextInputDialog';
 import { getPlaybackSourceRef } from '../../utils/appPlaybackGuards';
+import { canPersistPlaylistEntry } from '../../utils/playlistEntry';
 import { omni } from '../../services/onlineMusic/omni';
 import { selectDisplaySong, usePlaybackStore } from '../../stores/usePlaybackStore';
 import { useAddToPlaylistStore } from '../../stores/useAddToPlaylistStore';
@@ -54,15 +55,16 @@ export const AddToPlaylistHost: React.FC<AddToPlaylistHostProps> = ({
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [navidromePlaylists, setNavidromePlaylists] = useState<PlaylistEntry[]>([]);
 
-    const isStage = Boolean(currentSong && (currentSong as any).isStage === true);
     const isNavidrome = Boolean(currentSong && (currentSong as any).isNavidrome === true);
-    const isLocal = Boolean(currentSong && !isNavidrome && (((currentSong as any).isLocal === true) || Boolean((currentSong as any).localRef?.songId)));
     const playbackSourceRef = currentSong ? getPlaybackSourceRef(currentSong) : null;
     const isOnline = playbackSourceRef?.kind === 'online';
     const onlineProviderLabel = playbackSourceRef?.kind === 'online'
         ? omni.getProviderLabel(playbackSourceRef.providerId)
         : '';
     const canAddOnlineSong = Boolean(currentSong && isOnline && omni.canAddSongToPlaylist(currentSong));
+    // 跨来源歌单（LocalPlaylist.entries）对所有可回放来源开放：local/online/navidrome/
+    // external-media 都能进「本地歌单」；provider 歌单仍是同 provider 专属。
+    const canPersist = Boolean(currentSong && canPersistPlaylistEntry(currentSong));
 
     const refreshNavidromePlaylists = useCallback(async () => {
         const { getNavidromeConfig, navidromeApi } = await import('../../services/navidromeService');
@@ -90,35 +92,42 @@ export const AddToPlaylistHost: React.FC<AddToPlaylistHostProps> = ({
     }, [currentSong?.id, isNavidrome, refreshNavidromePlaylists]);
 
     const availablePlaylists = useMemo<PlaylistEntry[]>(() => {
-        if (isLocal) {
-            return localPlaylists.map((playlist) => ({
-                id: playlist.id,
+        // 「本地歌单」对所有来源开放，id 前缀 `local:` 与服务端歌单（`navi:`/`online:`）区分路由。
+        // 「Liked Songs」保持本地专属，非本地曲目不出现在它的目标列表里。
+        const isLocalSong = playbackSourceRef?.kind === 'local';
+        const localPlaylistEntries = localPlaylists
+            .filter((playlist) => isLocalSong || !playlist.isFavorite)
+            .map((playlist) => ({
+                id: `local:${playlist.id}`,
                 name: playlist.name,
-                description: `${playlist.songIds.length} ${t('playlist.tracks')}`,
+                description: `${playlist.entries?.length ?? playlist.songIds.length} ${t('playlist.tracks')}`,
             }));
-        }
 
         if (isOnline) {
-            return onlinePlaylists.map((playlist) => ({
-                id: String(playlist.id),
-                name: playlist.name,
-                description: `${playlist.trackCount || 0} ${t('playlist.tracks')}`,
-            }));
+            return [
+                ...localPlaylistEntries,
+                ...onlinePlaylists.map((playlist) => ({
+                    id: `online:${String(playlist.id)}`,
+                    name: playlist.name,
+                    description: `${playlist.trackCount || 0} ${t('playlist.tracks')}`,
+                })),
+            ];
         }
 
         if (isNavidrome) {
-            return navidromePlaylists;
+            return [
+                ...localPlaylistEntries,
+                ...navidromePlaylists.map((playlist) => ({ ...playlist, id: `navi:${playlist.id}` })),
+            ];
         }
 
-        return [];
-    }, [isLocal, isOnline, isNavidrome, localPlaylists, navidromePlaylists, onlinePlaylists, t]);
+        return localPlaylistEntries;
+    }, [isOnline, isNavidrome, localPlaylists, navidromePlaylists, onlinePlaylists, playbackSourceRef?.kind, t]);
 
-    const isApplicable = Boolean(currentSong && !isStage && (isLocal || isOnline || isNavidrome));
-    // Local and Navidrome can make a playlist on the spot, so having none is not a refusal there.
-    const canAdd = (isLocal)
-        || (isOnline && canAddOnlineSong && onlinePlaylists.length > 0)
-        || (isNavidrome);
-    const disabledReason = isOnline && !canAddOnlineSong
+    const isApplicable = canPersist;
+    // 任何可入歌单的曲目都有「本地歌单」可去（可新建），所以不存在「无处可放」。
+    const canAdd = canPersist;
+    const disabledReason = isOnline && !canAddOnlineSong && onlinePlaylists.length > 0 && localPlaylists.length === 0
         ? t('status.providerPlaylistMutationUnavailable', { provider: onlineProviderLabel })
         : (!canAdd ? t('localMusic.noPlaylistsFound') : undefined);
 
@@ -146,24 +155,24 @@ export const AddToPlaylistHost: React.FC<AddToPlaylistHostProps> = ({
                 description={t('home.playlists') || 'Playlists'}
                 playlists={availablePlaylists}
                 onSelect={async (playlistId) => {
-                    if (isLocal) {
-                        await onAddCurrentSongToLocalPlaylist(String(playlistId));
+                    const rawId = String(playlistId);
+                    if (rawId.startsWith('navi:')) {
+                        await onAddCurrentSongToNavidromePlaylist(rawId.slice('navi:'.length));
+                        await refreshNavidromePlaylists();
                         return;
                     }
 
-                    if (isOnline) {
-                        const playlist = onlinePlaylists.find(item => String(item.id) === String(playlistId));
+                    if (rawId.startsWith('online:')) {
+                        const playlist = onlinePlaylists.find(item => String(item.id) === rawId.slice('online:'.length));
                         if (!playlist) throw new Error('Selected playlist is unavailable');
                         await onAddCurrentSongToOnlinePlaylist(playlist);
                         return;
                     }
 
-                    if (isNavidrome) {
-                        await onAddCurrentSongToNavidromePlaylist(String(playlistId));
-                        await refreshNavidromePlaylists();
-                    }
+                    await onAddCurrentSongToLocalPlaylist(rawId.startsWith('local:') ? rawId.slice('local:'.length) : rawId);
                 }}
-                onCreate={(isLocal || isNavidrome) ? () => {
+                // Navidrome 歌曲仍建服务端歌单（它的家在服务器）；其余来源建「本地歌单」（entries）。
+                onCreate={(canPersist || isNavidrome) ? () => {
                     close();
                     setIsCreateOpen(true);
                 } : undefined}
@@ -179,15 +188,13 @@ export const AddToPlaylistHost: React.FC<AddToPlaylistHostProps> = ({
                 placeholder={t('localMusic.enterPlaylistName')}
                 confirmLabel={t('options.save')}
                 onConfirm={async (name) => {
-                    if (isLocal) {
-                        await onCreateCurrentLocalPlaylist(name);
-                        return;
-                    }
-
                     if (isNavidrome) {
                         await onCreateCurrentNavidromePlaylist(name);
                         await refreshNavidromePlaylists();
+                        return;
                     }
+
+                    await onCreateCurrentLocalPlaylist(name);
                 }}
             />
         </div>

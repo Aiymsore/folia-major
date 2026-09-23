@@ -16,9 +16,9 @@
 import { motionValue } from 'framer-motion';
 import { PlayerState, type SongResult } from '../../src/types';
 import {
-    buildAppleMusicEffectiveModel,
+    buildExternalMediaEffectiveModel,
     buildFoliaEffectiveModel,
-    type AppleMusicEffectiveInput,
+    type ExternalMediaEffectiveInput,
 } from '../../src/utils/effectivePlayback';
 import { buildAppOverlaysModel } from '../../src/components/app/overlays/buildAppOverlaysModel';
 import { resolveOverlayDurationSec } from '../../src/components/app/overlays/useAppOverlaysModel';
@@ -61,7 +61,7 @@ const foliaModel = () => buildFoliaEffectiveModel({
     controlsDisabled: false,
 });
 
-const appleMusicInput = (over: Partial<AppleMusicEffectiveInput> = {}): AppleMusicEffectiveInput => ({
+const appleMusicInput = (over: Partial<ExternalMediaEffectiveInput> = {}): ExternalMediaEffectiveInput => ({
     bridgeAvailable: true,
     connected: true,
     hasMedia: true,
@@ -74,7 +74,7 @@ const appleMusicInput = (over: Partial<AppleMusicEffectiveInput> = {}): AppleMus
     ...over,
 });
 
-const appleMusicModel = () => buildAppleMusicEffectiveModel(appleMusicInput(), 'connected', 'AppleInc.AppleMusicWin');
+const appleMusicModel = () => buildExternalMediaEffectiveModel(appleMusicInput(), 'ready', 'Chrome');
 
 const buildOverlays = (duration: number) => buildAppOverlaysModel({
     currentView: 'player',

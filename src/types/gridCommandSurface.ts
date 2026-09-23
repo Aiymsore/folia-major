@@ -21,6 +21,7 @@ export type GridSurfaceActionId =
     | 'resync-all-folders'
     | 'organize-song-info'
     | 'export-playlist'
+    | 'import-playlist'
     | 'edit-entity'
     | 'toggle-edit-mode';
 

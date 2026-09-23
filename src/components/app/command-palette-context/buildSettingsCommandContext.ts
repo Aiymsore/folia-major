@@ -189,5 +189,8 @@ export const buildSettingsCommandContext = (
             !useAutomixSettingsStore.getState().transitionPerformance,
         ),
         canUseTransitionPerformance: deps.canUseTransitionPerformance,
+        toggleBeatThisCpu: () => automix.handleToggleBeatThisCpu(
+            !useAutomixSettingsStore.getState().beatThisCpuOnly,
+        ),
     };
 };

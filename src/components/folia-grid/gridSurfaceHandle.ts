@@ -18,6 +18,7 @@ export type GridSurfaceParams = {
     canResyncAllFolders: boolean;
     canOrganizeSongInfo: boolean;
     canExportPlaylist: boolean;
+    canImportPlaylist: boolean;
     canEditEntity: boolean;
     canEditPlaylist: boolean;
     /** A source action is in flight; the disk and network actions grey out, exactly as the buttons do. */
@@ -41,6 +42,7 @@ export type GridSurfaceParams = {
     resyncAllFolders: () => void;
     organizeSongInfo: () => void;
     exportPlaylist: () => void;
+    importPlaylist: () => void;
     editEntity: () => void;
     toggleEditMode: () => void;
 };
@@ -79,6 +81,9 @@ export const buildGridSurfaceState = (params: GridSurfaceParams): GridSurfaceSta
     }
     if (params.canExportPlaylist && canRunSourceAction) {
         availableActions.push('export-playlist');
+    }
+    if (params.canImportPlaylist && canRunSourceAction) {
+        availableActions.push('import-playlist');
     }
     if (params.canEditEntity) {
         availableActions.push('edit-entity');
@@ -126,6 +131,7 @@ export const runGridSurfaceAction = (action: GridSurfaceActionId, params: GridSu
         case 'resync-all-folders': return params.resyncAllFolders();
         case 'organize-song-info': return params.organizeSongInfo();
         case 'export-playlist': return params.exportPlaylist();
+        case 'import-playlist': return params.importPlaylist();
         case 'edit-entity': return params.editEntity();
         case 'toggle-edit-mode': return params.toggleEditMode();
         default: return;

@@ -17,6 +17,7 @@ import type { NextTrackOptions, PlaybackNavigationOptions, SkipPromptMessageKey,
 import type { NavidromeSong } from '../types/navidrome';
 import {
     getPlaybackSongKey,
+    isExternalMediaPlaybackSong,
     isLocalPlaybackSong,
     isNavidromePlaybackSong,
     isSamePlaybackSong,
@@ -24,6 +25,7 @@ import {
     resolveNavidromePlaybackCarrier,
 } from '../utils/appPlaybackGuards';
 import { applyQueueAddBehavior } from '../utils/queueAddBehavior';
+import { isExternalMediaQueueSongPlayable } from '../utils/externalMediaQueueReconcile';
 import { buildStagePlayerSnapshot, resolveStagePlayerQueueItemIndex } from '../utils/stagePlayerSnapshot';
 import type { LocalLibraryDisplayCatalog } from '../services/playbackAdapters';
 import type { SearchReturnView, SearchSource } from '../stores/useSearchNavigationStore';
@@ -91,6 +93,18 @@ type UsePlaybackQueueControllerParams = {
         queue?: NavidromeSong[],
         options?: PlaybackNavigationOptions,
     ) => Promise<void>;
+    /**
+     * Plays an Apple Music track through the external media backend.
+     *
+     * Not a preview and not a Folia deck load: it records the track as Folia's current song and
+     * queue entry, then asks music.apple.com (in Chrome, via the extension) to play the catalog id.
+     * See `onPlayExternalMediaSong`.
+     */
+    onPlayExternalMediaSong: (
+        song: SongResult,
+        queue?: SongResult[],
+        options?: PlaybackNavigationOptions,
+    ) => Promise<void>;
     onAddLocalSongToQueue: (localSong: LocalSong) => void;
     onAddNavidromeSongsToQueue: (songs: NavidromeSong[]) => void;
     searchDeps: SearchDeps;
@@ -155,6 +169,7 @@ export function usePlaybackQueueController({
     interruptStagePlaybackForMainTransition,
     onPlayLocalSong,
     onPlayNavidromeSong,
+    onPlayExternalMediaSong,
     onAddLocalSongToQueue,
     onAddNavidromeSongsToQueue,
     searchDeps,
@@ -281,6 +296,16 @@ export function usePlaybackQueueController({
     const isQueueSongPlayable = useCallback((queuedSong: SongResult) => {
         if (isLocalPlaybackSong(queuedSong) || isNavidromePlaybackSong(queuedSong)) {
             return true;
+        }
+        // External media tracks are playable without asking a provider, and `omni.canPlaySong`
+        // would answer `false` for every one of them (no provider owns them). Without this the
+        // queue would silently auto-skip the entire Apple Music surface.
+        //
+        // Playable now means "has a catalog id", not "has a preview URL": the preview path is gone
+        // and `playById` addresses the catalog. A library upload with no catalog entry stays
+        // unplayable, which is correct and permanent — see `resolveExternalMediaPlayableId`.
+        if (isExternalMediaPlaybackSong(queuedSong)) {
+            return isExternalMediaQueueSongPlayable(queuedSong);
         }
         return !isSongUnavailable(queuedSong) && omni.canPlaySong(queuedSong);
     }, []);
@@ -461,6 +486,7 @@ export function usePlaybackQueueController({
         const isLatestPlaybackRequest = () => playbackRequestIdRef.current === playbackRequestId;
         const isLocal = isLocalPlaybackSong(song);
         const isNavidrome = isNavidromePlaybackSong(song);
+        const isAppleMusic = isExternalMediaPlaybackSong(song);
         let prefetched: ReturnType<typeof getPrefetchedData> = null;
         let preloadedOnlineAudioResult: Awaited<ReturnType<typeof loadOnlineSongAudioSource>> | null = null;
         const queueContext = queue.length > 0 ? queue : playQueue.length === 0 ? [song] : playQueue;
@@ -468,7 +494,10 @@ export function usePlaybackQueueController({
         const skipCount = options.unavailableSkipCount ?? 0;
         playbackAutoSkipCountRef.current = skipCount;
 
-        if (!isLocal && !isNavidrome && isSongUnavailable(song)) {
+        // Apple Music is excluded from the online unavailability probe for the same reason local
+        // and Navidrome are: the probe asks a provider whether it can serve the song, and Apple
+        // Music has no provider. Letting it through would mark every preview as unavailable.
+        if (!isLocal && !isNavidrome && !isAppleMusic && isSongUnavailable(song)) {
             if (await handleMarkedUnavailableSong(song, queueContext, isFmCall, options)) {
                 return;
             }
@@ -507,6 +536,19 @@ export function usePlaybackQueueController({
                 .map(queuedSong => resolveNavidromePlaybackCarrier(queuedSong))
                 .filter((queuedSong): queuedSong is NavidromeSong => Boolean(queuedSong));
             await onPlayNavidromeSong(navidromeSong, navidromeQueue, {
+                shouldNavigateToPlayer,
+                unifiedQueue: newQueue,
+            });
+            return;
+        }
+
+        // External media tracks never reach the online path below: there is no Omni provider to
+        // fetch an audio source from, and Folia does not decode these bytes at all — it asks the
+        // external backend (music.apple.com in Chrome) to play the track by catalog id. Without
+        // this branch the song would be treated as an online track and every request would fail on
+        // a provider that does not exist.
+        if (isExternalMediaPlaybackSong(song)) {
+            await onPlayExternalMediaSong(song, queueContext, {
                 shouldNavigateToPlayer,
                 unifiedQueue: newQueue,
             });

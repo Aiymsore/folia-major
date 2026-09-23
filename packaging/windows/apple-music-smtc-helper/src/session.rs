@@ -1,5 +1,6 @@
 // packaging/windows/apple-music-smtc-helper/src/session.rs
-// Windows-only: reads the Apple Music session out of the System Media Transport Controls (SMTC)
+// Windows-only: reads the matched media session (by default the Chrome tab playing music.apple.com)
+// out of the System Media Transport Controls (SMTC)
 // surface and converts it into the platform-independent SessionSnapshot from events.rs. Phase 2
 // adds the reverse direction: `SessionTransport` addresses the same session and drives it with the
 // Try* API.
@@ -8,9 +9,12 @@
 //   * `GlobalSystemMediaTransportControlsSessionManager::RequestAsync` is the entry point; the
 //     manager must be obtained on a thread that has initialized the Windows Runtime.
 //   * A session's own AUMID (`SourceAppUserModelId`) is the only stable identity. The Microsoft
-//     Store Apple Music package reports `AppleInc.AppleMusicWin_nzyj5cx40ttqa!App`.
+//     Store Apple Music package reports `AppleInc.AppleMusicWin_nzyj5cx40ttqa!App` (measured while
+//     that app was the target; the default target is now `Chrome`).
 //   * Apple Music quantizes `Position` to whole seconds and reports an empty `AlbumTitle`, so both
-//     are treated as possibly-absent rather than as fixed-width fields.
+//     are treated as possibly-absent rather than as fixed-width fields. `LastUpdatedTime` is read
+//     alongside them: it is the OS's own timestamp for the timeline sample, and it is what lets a
+//     consumer measure the position's age instead of assuming it was just captured.
 //   * `TryGetMediaPropertiesAsync` is the only source of title/artist/album; the synchronous
 //     `GetPlaybackInfo` / `GetTimelineProperties` cover status and time. Each is read
 //     independently so one failing property cannot blank the whole snapshot.
@@ -62,6 +66,22 @@ fn time_span_ms(value: Result<TimeSpan, windows::core::Error>) -> Option<i64> {
 
 fn non_negative_u64(value: Option<i64>) -> Option<u64> {
     value.and_then(|ms| if ms > 0 { Some(ms as u64) } else { None })
+}
+
+/// WinRT `DateTime` → Unix epoch milliseconds.
+///
+/// `DateTime` stores a 100-nanosecond tick count since 1601-01-01 UTC, so the conversion needs the
+/// fixed 1601→1970 offset (11 644 473 600 seconds). The getter is fallible like every other WinRT
+/// accessor here, and a nonsensical value (before 1970) is reported as absent rather than as a
+/// negative-looking huge number — this field is only ever used to compute an age, and a wrong age
+/// is worse than a missing one.
+fn date_time_to_epoch_ms(value: Result<windows::Foundation::DateTime, windows::core::Error>) -> Option<u64> {
+    const TICKS_PER_MS: u64 = 10_000;
+    const EPOCH_OFFSET_MS: u64 = 11_644_473_600_000;
+
+    let ticks = value.ok()?.UniversalTime as u64;
+    let ms = ticks / TICKS_PER_MS;
+    ms.checked_sub(EPOCH_OFFSET_MS).filter(|value| *value > 0)
 }
 
 /// `GlobalSystemMediaTransportControlsSessionPlaybackStatus` is a Windows Runtime enum, so it can
@@ -183,7 +203,7 @@ fn snapshot_for(
         .map(|info| playback_status_label(info.PlaybackStatus()))
         .unwrap_or_else(|_| "Unknown".to_string());
 
-    let (position_ms, duration_ms) = match session.GetTimelineProperties() {
+    let (position_ms, duration_ms, last_updated_ms) = match session.GetTimelineProperties() {
         Ok(timeline) => {
             let end = time_span_ms(timeline.EndTime());
             let start = time_span_ms(timeline.StartTime()).unwrap_or(0);
@@ -192,9 +212,10 @@ fn snapshot_for(
                 // EndTime is the track length in practice, but subtract StartTime so a player that
                 // reports a non-zero origin cannot produce a duration shorter than the position.
                 non_negative_u64(end.map(|end| end - start)),
+                date_time_to_epoch_ms(timeline.LastUpdatedTime()),
             )
         }
-        Err(_) => (None, None),
+        Err(_) => (None, None, None),
     };
 
     let (title, artist, album, has_thumbnail) = match session
@@ -222,6 +243,7 @@ fn snapshot_for(
         duration_ms,
         has_thumbnail,
         updated_at_ms: now_epoch_ms(),
+        last_updated_ms,
     }
 }
 
@@ -237,9 +259,9 @@ pub struct SessionTransport {
 }
 
 impl SessionTransport {
-    /// Binds to the Apple Music session, or explains that there is none. A missing Apple Music
-    /// session is an error, never a fallback: the caller must be able to prove that a command did
-    /// not land on another player.
+    /// Binds to the matched session (by default the Chrome tab playing music.apple.com), or explains
+    /// that there is none. A missing session is an error, never a fallback: the caller must be able
+    /// to prove that a command did not land on another player.
     pub fn open(match_substring: &str) -> Result<Self, String> {
         let manager = open_manager()?;
         match find_session(&manager, match_substring)? {
@@ -248,7 +270,7 @@ impl SessionTransport {
                 source_app_user_model_id,
             }),
             None => Err(format!(
-                "no session matching '{match_substring}' is visible in SMTC (is Apple Music running?)"
+                "no session matching '{match_substring}' is visible in SMTC (is the target player running?)"
             )),
         }
     }
@@ -302,7 +324,7 @@ impl Transport for SessionTransport {
                 // this side: the value sent is correct (see ms_to_ticks, which has its own test) and
                 // the returned bool is reported faithfully. Do not "repair" this by retrying - a retry
                 // only repeats a call the application has already refused. Renderer-side note:
-                // handleAppleMusicSeek in src/hooks/useTransportDispatcher.ts.
+                // handleExternalMediaSeek in src/hooks/useTransportDispatcher.ts.
                 session.TryChangePlaybackPositionAsync(ms_to_ticks(position_ms))?.join()
             }),
         };
@@ -320,11 +342,16 @@ mod tests {
 
     #[test]
     fn matching_is_case_insensitive_and_substring_based() {
-        let aumid = "AppleInc.AppleMusicWin_nzyj5cx40ttqa!App";
-        assert!(matches_session(aumid, "AppleMusicWin"));
-        assert!(matches_session(aumid, "applemusicwin"));
-        assert!(matches_session(aumid, "AppleInc.AppleMusicWin"));
-        assert!(!matches_session(aumid, "Microsoft.ZuneMusic"));
+        // The default `Chrome` must cover every Chrome AUMID spelling seen so far — the plain
+        // stable id, a channel-suffixed one, and a bare executable name — while excluding other
+        // browsers and players (the desktop Apple Music app included: nothing addresses it any more).
+        for aumid in ["Chrome", "chrome.exe", "Chrome Beta", "Chrome_8wekyb3d8bbwe!Chrome"] {
+            assert!(matches_session(aumid, "Chrome"));
+            assert!(matches_session(aumid, "chrome"));
+        }
+        assert!(!matches_session("MSEdge", "Chrome"));
+        assert!(!matches_session("Microsoft.ZuneMusic", "Chrome"));
+        assert!(!matches_session("AppleInc.AppleMusicWin_nzyj5cx40ttqa!App", "Chrome"));
     }
 
     #[test]

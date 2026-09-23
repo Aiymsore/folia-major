@@ -13,6 +13,7 @@ const params = (overrides: Partial<GridSurfaceParams> = {}): GridSurfaceParams =
     canResyncAllFolders: false,
     canOrganizeSongInfo: false,
     canExportPlaylist: false,
+    canImportPlaylist: false,
     canEditEntity: false,
     canEditPlaylist: false,
     isSourceActionPending: false,
@@ -33,6 +34,7 @@ const params = (overrides: Partial<GridSurfaceParams> = {}): GridSurfaceParams =
     resyncAllFolders: vi.fn(),
     organizeSongInfo: vi.fn(),
     exportPlaylist: vi.fn(),
+    importPlaylist: vi.fn(),
     editEntity: vi.fn(),
     toggleEditMode: vi.fn(),
     ...overrides,
@@ -54,6 +56,13 @@ describe('grid surface state', () => {
         expect(sorting).toContain('sort-file-name');
         expect(sorting).toContain('sort-toggle-direction');
         expect(buildGridSurfaceState(params()).availableActions).not.toContain('sort-file-name');
+    });
+
+    // 导入歌单与导出是同一档分支能力：入口在就能用，不在就整条退场。
+    it('offers playlist import exactly where the local import entry exists', () => {
+        expect(buildGridSurfaceState(params({ canImportPlaylist: true })).availableActions)
+            .toContain('import-playlist');
+        expect(buildGridSurfaceState(params()).availableActions).not.toContain('import-playlist');
     });
 
     // 按钮在 isSourceActionPending 时是 disabled 的，命令必须跟着一起退场，
@@ -96,5 +105,15 @@ describe('grid surface dispatch', () => {
 
         expect(noSorting.setSortField).not.toHaveBeenCalled();
         expect(noSorting.playFiltered).not.toHaveBeenCalled();
+    });
+
+    it('dispatches playlist import only when offered', () => {
+        const offered = params({ canImportPlaylist: true });
+        runGridSurfaceAction('import-playlist', offered);
+        expect(offered.importPlaylist).toHaveBeenCalledTimes(1);
+
+        const refused = params();
+        runGridSurfaceAction('import-playlist', refused);
+        expect(refused.importPlaylist).not.toHaveBeenCalled();
     });
 });

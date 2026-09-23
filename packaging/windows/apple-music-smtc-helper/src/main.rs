@@ -1,12 +1,13 @@
 // packaging/windows/apple-music-smtc-helper/src/main.rs
-// Folia Windows Apple Music SMTC helper.
+// Folia Windows external-media SMTC helper.
 //
-//   watch        — reads the Apple Music session out of the System Media Transport Controls surface
+//   watch        — reads the matched media session (by default the Chrome tab playing
+//                  music.apple.com) out of the System Media Transport Controls surface
 //                  and reports it as JSONL events on stdout (Phase 1, read-only).
 //   command <n>  — one transport command (play/pause/toggle/previous/next/seek) against the same
 //                  session, one `response` event on stdout, exit (Phase 2).
 //
-// Both talk to electron/appleMusicSmtcBridge.cjs over the same one-way-per-direction protocol:
+// Both talk to electron/externalMediaSmtcBridge.cjs over the same one-way-per-direction protocol:
 // JSONL commands on stdin, JSONL events on stdout, and every human-readable line on stderr. Nothing
 // in this crate may print to stdout outside events.rs — the consumer parses that stream.
 //

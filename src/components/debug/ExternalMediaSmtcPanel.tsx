@@ -1,21 +1,25 @@
 import React, { useEffect, useState } from 'react';
-import AppleMusicSmtcControls from './AppleMusicSmtcControls';
-import { DASH, Field, formatMs, formatTimestamp, text } from './appleMusicSmtcFormat';
+import ExternalMediaSmtcControls from './ExternalMediaSmtcControls';
+import { DASH, Field, formatMs, formatTimestamp, text } from './externalMediaSmtcFormat';
 
-// src/components/debug/AppleMusicSmtcPanel.tsx
-// Apple Music SMTC acceptance surface: shows what the bridge currently reports, and (Phase 2) offers
-// the transport commands through the same preload method a real player will use.
+// src/components/debug/ExternalMediaSmtcPanel.tsx
+// External media acceptance surface: shows what the bridge currently reports, and offers the
+// transport commands through the same preload method the real player uses.
 //
-// Presentation and orchestration only. It owns no IPC channel, no polling timer on the main side and
-// no state beyond the last status object: it reads through the preload bridge
-// (`appleMusicGetState`) and follows pushes (`onAppleMusicStateChanged`), which is the same single
-// data path the rest of the app will use. The command half lives in AppleMusicSmtcControls so this
-// file stays a layout.
+// Presentation and orchestration only. It owns no IPC channel and no state beyond the last status
+// object: it reads through the preload bridge (`externalMediaGetState`) and follows pushes
+// (`onExternalMediaStateChanged`), which is the same single data path the rest of the app uses. The
+// command half lives in ExternalMediaSmtcControls so this file stays a layout.
 //
 // Rendered only from DevDebugOverlay, which Settings > Developer already gates. That is what makes
 // this dev-only without a second visibility switch that could drift from the overlay's.
+//
+// This panel is the fastest way to diagnose the four prerequisites, because it shows each rung of the
+// ladder separately (`bridgeAvailable` / `extensionConnected` / `connected` / `signedIn` /
+// `storefrontMatches`). A user-visible "cannot play" almost always reduces to one of them being false,
+// and the rung names say which.
 
-type AppleMusicSmtcStatus = {
+type ExternalMediaStatus = {
     bridgeAvailable: boolean;
     helperState: string;
     connected: boolean;
@@ -30,10 +34,15 @@ type AppleMusicSmtcStatus = {
     updatedAt: number | null;
     lastEventAt: number | null;
     sessionCount: number | null;
+    extensionConnected: boolean;
+    extensionVersion: string | null;
+    extensionCapabilities: string[];
+    signedIn: boolean | null;
+    storefrontMatches: boolean | null;
     lastCommand: {
         ok: boolean;
         command: string;
-        targetAppUserModelId: string | null;
+        targetSourceId: string | null;
         error: string | null;
         errorKind: string | null;
         completedAtMs: number | null;
@@ -42,18 +51,23 @@ type AppleMusicSmtcStatus = {
     isStale?: boolean;
 };
 
-interface AppleMusicSmtcPanelProps {
+interface ExternalMediaSmtcPanelProps {
     panelClass: string;
 }
 
-const AppleMusicSmtcPanel: React.FC<AppleMusicSmtcPanelProps> = ({ panelClass }) => {
-    const [status, setStatus] = useState<AppleMusicSmtcStatus | null>(null);
+/** Renders a tri-state fact: `null` is "unknown", which is different from `false`. */
+const tri = (value: boolean | null | undefined): string => (
+    value === null || value === undefined ? 'unknown' : String(value)
+);
+
+const ExternalMediaSmtcPanel: React.FC<ExternalMediaSmtcPanelProps> = ({ panelClass }) => {
+    const [status, setStatus] = useState<ExternalMediaStatus | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         const bridge = window.electron;
-        if (typeof bridge?.appleMusicGetState !== 'function') {
-            setError('appleMusicGetState is unavailable: not an Electron window, or the preload bridge is missing.');
+        if (typeof bridge?.externalMediaGetState !== 'function') {
+            setError('externalMediaGetState is unavailable: not an Electron window, or the preload bridge is missing.');
             return;
         }
 
@@ -61,7 +75,7 @@ const AppleMusicSmtcPanel: React.FC<AppleMusicSmtcPanelProps> = ({ panelClass })
         // One initial read for the current value, then pushes keep it fresh. No interval: the main
         // process already broadcasts on every change, and a poll here would be a second source of
         // truth for the same number.
-        void bridge.appleMusicGetState()
+        void bridge.externalMediaGetState()
             .then((next) => {
                 if (!disposed) setStatus(next);
             })
@@ -69,8 +83,8 @@ const AppleMusicSmtcPanel: React.FC<AppleMusicSmtcPanelProps> = ({ panelClass })
                 if (!disposed) setError(String((cause as Error)?.message || cause));
             });
 
-        const unsubscribe = typeof bridge.onAppleMusicStateChanged === 'function'
-            ? bridge.onAppleMusicStateChanged((next) => {
+        const unsubscribe = typeof bridge.onExternalMediaStateChanged === 'function'
+            ? bridge.onExternalMediaStateChanged((next) => {
                 if (!disposed) {
                     setStatus(next);
                     setError(null);
@@ -84,17 +98,27 @@ const AppleMusicSmtcPanel: React.FC<AppleMusicSmtcPanelProps> = ({ panelClass })
         };
     }, []);
 
+    // The ladder is read top-down: each rung is a precondition for the next, and the first false one
+    // is what the user has to fix.
     const connectionLabel = !status
         ? 'no data yet'
-        : status.connected
-            ? 'session found'
-            : 'no Apple Music session';
+        : !status.bridgeAvailable
+            ? 'bridge unavailable'
+            : !status.extensionConnected
+                ? 'extension not connected'
+                : !status.connected
+                    ? 'no music.apple.com tab'
+                    : status.signedIn === false
+                        ? 'not signed in'
+                        : status.storefrontMatches === false
+                            ? 'storefront mismatch'
+                            : 'ready';
 
     return (
         <section className={panelClass}>
             <div className="mb-2 flex items-center justify-between gap-3">
                 <div className="text-[10px] uppercase tracking-[0.16em] opacity-60">
-                    Apple Music · SMTC
+                    External media · Chrome
                 </div>
                 <div className="flex items-center gap-2 text-[10px]">
                     {status?.isStale && <span className="opacity-70">stale</span>}
@@ -115,8 +139,23 @@ const AppleMusicSmtcPanel: React.FC<AppleMusicSmtcPanelProps> = ({ panelClass })
                 </div>
             )}
 
+            {/* The prerequisite ladder, in order. This is the block to read first when playback fails. */}
             <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
-                <Field label="connected" value={status ? String(status.connected) : DASH} mono />
+                <Field label="bridgeAvailable" value={status ? String(status.bridgeAvailable) : DASH} mono />
+                <Field label="extensionConnected" value={status ? String(status.extensionConnected) : DASH} mono />
+                <Field label="connected (SMTC)" value={status ? String(status.connected) : DASH} mono />
+                <Field label="signedIn" value={tri(status?.signedIn)} mono />
+                <Field label="storefrontMatches" value={tri(status?.storefrontMatches)} mono />
+                <Field label="extensionVersion" value={text(status?.extensionVersion)} mono />
+            </div>
+
+            {status && status.extensionCapabilities.length > 0 && (
+                <div className="mt-2 border-t border-current/10 pt-2">
+                    <Field label="capabilities" value={status.extensionCapabilities.join(', ')} mono />
+                </div>
+            )}
+
+            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-current/10 pt-2 sm:grid-cols-3">
                 <Field label="helperState" value={text(status?.helperState)} />
                 <Field label="playbackStatus" value={text(status?.playbackStatus)} />
                 <Field label="positionMs" value={formatMs(status?.positionMs)} mono />
@@ -133,8 +172,8 @@ const AppleMusicSmtcPanel: React.FC<AppleMusicSmtcPanelProps> = ({ panelClass })
             </div>
 
             <div className="mt-3">
-                <AppleMusicSmtcControls
-                    connected={status?.connected === true}
+                <ExternalMediaSmtcControls
+                    connected={status?.extensionConnected === true}
                     initialResult={status?.lastCommand ?? null}
                 />
             </div>
@@ -142,4 +181,4 @@ const AppleMusicSmtcPanel: React.FC<AppleMusicSmtcPanelProps> = ({ panelClass })
     );
 };
 
-export default React.memo(AppleMusicSmtcPanel);
+export default React.memo(ExternalMediaSmtcPanel);

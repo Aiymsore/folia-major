@@ -7,17 +7,20 @@ import { getActiveGridViewCollection, useCollectionNavigationStore } from '../..
 import { LocalSong, SongResult, UnifiedSong } from '../../../types';
 import { resolveNavidromePlaybackCarrier } from '../../../utils/appPlaybackGuards';
 import { deleteFolderSongs, resyncAllFolders, resyncFolder } from '../../../services/localMusicService';
-import { deleteLocalPlaylist, removeSongsFromLocalPlaylist, updateLocalPlaylist } from '../../../services/localPlaylistService';
+import { deleteLocalPlaylist, removeEntriesFromLocalPlaylist, removeSongsFromLocalPlaylist, updateLocalPlaylist } from '../../../services/localPlaylistService';
 import { downloadLocalPlaylistM3u8 } from '../../../services/localPlaylistFileService';
+import { buildPlaylistImportStatusMessage, downloadPortablePlaylist, importPlaylistFile } from '../../../services/portablePlaylistFileService';
 import { getNavidromeConfig, navidromeApi } from '../../../services/navidromeService';
 import { getLocalCoverAssetUrl } from '../../../services/localCoverAssetUrl';
 import {
     collectionKey,
     GridViewCollectionDescriptor,
     LocalGridViewCollectionDescriptor,
+    isAppleMusicGridViewCollection,
     isLocalGridViewCollection,
     isNavidromeGridViewCollection,
     refreshLocalGridViewCollection,
+    resolveAppleMusicGridViewTracks,
     resolveLocalAlbumArtistDisplay,
     resolveLocalGridViewTracks,
     resolveNavidromeGridViewTracks,
@@ -106,12 +109,15 @@ const resolveLiveLocalCollection = (
 
     const validSongIds = new Set(surfaceProps.localSongs.map(song => song.id));
     const songIds = playlist.songIds.filter(songId => validSongIds.has(songId));
+    // 跨来源歌单以 entries 为准：条目顺序即歌单顺序，曲目在 resolveLocalGridViewTracks 里解析。
+    const entries = playlist.entries?.length ? playlist.entries : undefined;
 
     return {
         ...collection,
         name: playlist.name,
         songIds,
-        trackCount: songIds.length,
+        ...(entries ? { entries } : { entries: undefined }),
+        trackCount: entries ? entries.length : songIds.length,
         isVirtual: playlist.isFavorite,
     };
 };
@@ -453,7 +459,8 @@ const GridViewOverlayHost: React.FC<GridViewOverlayHostProps> = ({
             surfaceProps.localSongs,
             localLibraryCatalog,
         ) as UnifiedSong[];
-        if (liveSelectedCollection.songIds.length > 0 && resolvedTracks.length === 0) {
+        const expectedTrackCount = liveSelectedCollection.entries?.length ?? liveSelectedCollection.songIds.length;
+        if (expectedTrackCount > 0 && resolvedTracks.length === 0) {
             handleBackCollection();
             return;
         }
@@ -492,6 +499,41 @@ const GridViewOverlayHost: React.FC<GridViewOverlayHostProps> = ({
             })
             .catch((error) => {
                 console.error('[GridViewOverlayHost] Failed to load Navidrome GridView tracks:', error);
+                if (!cancelled) {
+                    setExternalTracks([]);
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setExternalTracksLoading(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        selectedCollection,
+    ]);
+
+    useEffect(() => {
+        if (!selectedCollection || !isAppleMusicGridViewCollection(selectedCollection)) {
+            return;
+        }
+
+        let cancelled = false;
+        setExternalTracks([]);
+        setExternalTracksLoading(true);
+        setResolvedLocalCollectionCoverUrl(undefined);
+
+        resolveAppleMusicGridViewTracks(selectedCollection)
+            .then((tracks) => {
+                if (!cancelled) {
+                    setExternalTracks(tracks);
+                }
+            })
+            .catch((error) => {
+                console.error('[GridViewOverlayHost] Failed to load Apple Music GridView tracks:', error);
                 if (!cancelled) {
                     setExternalTracks([]);
                 }
@@ -592,7 +634,12 @@ const GridViewOverlayHost: React.FC<GridViewOverlayHostProps> = ({
             onExportPlaylist: async (playlistId) => {
                 const playlist = surfaceProps.localPlaylists.find(item => item.id === playlistId);
                 if (!playlist) return;
-                downloadLocalPlaylistM3u8(playlist, surfaceProps.localSongs);
+                // 混合歌单只提供 JSON 便携导出；纯本地歌单维持 M3U8。
+                if (playlist.entries?.length) {
+                    downloadPortablePlaylist(playlist.name, playlist.entries);
+                } else {
+                    downloadLocalPlaylistM3u8(playlist, surfaceProps.localSongs);
+                }
                 surfaceProps.onStatusMessage?.({
                     type: 'success',
                     text: t('localMusic.playlistExportSuccess', { name: playlist.name }),
@@ -600,6 +647,14 @@ const GridViewOverlayHost: React.FC<GridViewOverlayHostProps> = ({
             },
             onRemovePlaylistSongs: async (playlistId, songIds) => {
                 await removeSongsFromLocalPlaylist(playlistId, songIds);
+            },
+            onRemovePlaylistEntries: async (playlistId, entryKeys) => {
+                await removeEntriesFromLocalPlaylist(playlistId, entryKeys);
+            },
+            onImportPlaylistFile: async (file) => {
+                const result = await importPlaylistFile(file, surfaceProps.localSongs);
+                await surfaceProps.onRefreshLocalSongs();
+                surfaceProps.onStatusMessage?.(buildPlaylistImportStatusMessage(result, t));
             },
         },
         navidrome: {

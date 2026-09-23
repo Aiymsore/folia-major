@@ -1,6 +1,7 @@
 param(
-    # Substring match against SourceAppUserModelId.
-    [string]$Match = 'AppleMusicWin',
+    # Substring match against SourceAppUserModelId. The default targets the Chrome tab playing
+    # music.apple.com (the external-media backend's media source).
+    [string]$Match = 'Chrome',
     # Target sampling period. Below ~20 ms the WinRT properties call itself dominates the loop, and
     # the measured cadence reported at the end is what the statistics actually used.
     [ValidateRange(5, 5000)]

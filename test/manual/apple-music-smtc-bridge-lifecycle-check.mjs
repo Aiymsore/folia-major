@@ -2,7 +2,7 @@
 //
 // bridge 的「未运行时不排队命令」契约自检（纯 node，沙箱内可跑）。
 //
-// 存在的理由：test/unit/electron/appleMusicSmtcBridge.test.ts 里有一条断言
+// 存在的理由：test/unit/electron/externalMediaSmtcBridge.test.ts 里有一条断言
 // `expect(child).toBeUndefined()`，而该文件在 sendCommand 这一层没有在 beforeEach 重置模块级
 // 的 fake child，于是它读到的是上一个用例留下的对象 —— 断言失败，但实现是对的。这个自检直接
 // 对着 bridge 验证被断言的行为本身，把「实现没错」这件事固定下来，而不是只靠阅读测试代码。
@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 
 const require = createRequire(import.meta.url);
-const { createAppleMusicSmtcBridge } = require('../../electron/appleMusicSmtcBridge.cjs');
+const { createExternalMediaSmtcBridge } = require('../../electron/externalMediaSmtcBridge.cjs');
 
 let failures = 0;
 let checks = 0;
@@ -33,7 +33,7 @@ const eq = (label, actual, expected) => {
 function createBridgeHarness() {
     let spawnCalls = 0;
     let child = null;
-    const bridge = createAppleMusicSmtcBridge({
+    const bridge = createExternalMediaSmtcBridge({
         spawnFn: () => {
             spawnCalls += 1;
             const stdout = new EventEmitter();
@@ -86,7 +86,7 @@ console.log('\nstart 之后：命令才会真正下发');
         id: request.id,
         command: 'next',
         ok: true,
-        targetAppUserModelId: 'AppleInc.AppleMusicWin_nzyj5cx40ttqa!App',
+        targetAppUserModelId: 'Chrome',
         error: null,
         errorKind: null,
         completedAtMs: 1,

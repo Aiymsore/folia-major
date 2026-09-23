@@ -12,7 +12,7 @@ import id from '../../../src/i18n/locales/in';
 const echo = (key: string) => key;
 
 const ALL_SECTIONS: SettingsSectionId[] = [
-    'appearance', 'general', 'playback', 'interaction', 'integration', 'storage', 'desktop', 'lab', 'developer',
+    'appearance', 'general', 'playback', 'interaction', 'integration', 'externalMedia', 'storage', 'desktop', 'lab', 'developer',
 ];
 
 const lookup = (bundle: Record<string, unknown>, key: string): unknown => (
@@ -32,7 +32,9 @@ describe('settingsNavModel', () => {
         const ids = flattenSettingsNavItems(groups).map(item => item.id);
 
         expect(ids).not.toContain('desktop');
-        expect(ids).toHaveLength(ALL_SECTIONS.length - 1);
+        // 外部媒体后端与 desktop 同为桌面限定：SMTC helper 与 loopback 桥都只存在于 Electron。
+        expect(ids).not.toContain('externalMedia');
+        expect(ids).toHaveLength(ALL_SECTIONS.length - 2);
         expect(groups.every(group => group.items.length > 0)).toBe(true);
     });
 

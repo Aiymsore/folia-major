@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMotionValueEvent } from 'framer-motion';
 import { PlayerState, type SongResult } from '../types';
-import type { AppleMusicAvailability, PlaybackBackend } from '../types/playbackBackend';
+import type { ExternalMediaAvailability, PlaybackBackend } from '../types/playbackBackend';
 import {
     selectDisplayCoverUrl,
     selectDisplayDuration,
@@ -11,9 +11,10 @@ import {
 } from '../stores/usePlaybackStore';
 import { currentTime } from '../stores/motionSignals';
 import { useActivePlaybackBackendStore } from '../stores/useActivePlaybackBackendStore';
-import { hasAppleMusicMedia, useAppleMusicSmtcStore } from '../stores/useAppleMusicSmtcStore';
+import { hasExternalMedia, useExternalMediaStore } from '../stores/useExternalMediaStore';
+import { resolveExternalMediaAvailability } from '../utils/externalMediaStatus';
 import {
-    buildAppleMusicEffectiveModel,
+    buildExternalMediaEffectiveModel,
     type EffectivePlaybackModel,
 } from '../utils/effectivePlayback';
 
@@ -46,20 +47,24 @@ export const useEffectiveBackend = (): PlaybackBackend => (
     useActivePlaybackBackendStore(state => state.activeBackend)
 );
 
-export const useAppleMusicAvailability = (): AppleMusicAvailability => {
-    const status = useAppleMusicSmtcStore(state => state.status);
-    if (!status?.bridgeAvailable) return 'unavailable';
-    return status.connected ? 'connected' : 'not-running';
-};
+/**
+ * 外部媒体后端当前的可显示状态。
+ *
+ * 判据完全交给 `resolveExternalMediaAvailability`（纯函数、可单测）—— 六态阶梯的**顺序**是承重的
+ * （桥可达 → 扩展已连接 → 有 tab → 已登录 → storefront 匹配），在这里重写一遍就是第二套规则。
+ */
+export const useExternalMediaAvailability = (): ExternalMediaAvailability => (
+    resolveExternalMediaAvailability(useExternalMediaStore(state => state.status))
+);
 
 /**
  * 播放位置（秒）。
  *
  * folia 位置是 motion signal（每帧变化，刻意不是 store state），所以这里用
  * `useMotionValueEvent` 订阅后落到本地 state。订阅只在 backend === 'folia' 时写 state，
- * apple-music 模式下位置来自 SMTC，不会因为 Folia 的位置变化触发额外渲染。
+ * external-media 模式下位置来自外部观察（经校正层），不会因为 Folia 的位置变化触发额外渲染。
  */
-const useEffectivePositionSec = (backend: PlaybackBackend, appleMusicPositionSec: number): number => {
+const useEffectivePositionSec = (backend: PlaybackBackend, externalMediaPositionSec: number): number => {
     const [foliaPositionSec, setFoliaPositionSec] = useState(() => currentTime.get());
 
     useMotionValueEvent(currentTime, 'change', (value: number) => {
@@ -67,14 +72,14 @@ const useEffectivePositionSec = (backend: PlaybackBackend, appleMusicPositionSec
         setFoliaPositionSec(value);
     });
 
-    return backend === 'folia' ? foliaPositionSec : appleMusicPositionSec;
+    return backend === 'folia' ? foliaPositionSec : externalMediaPositionSec;
 };
 
 export const useEffectivePlaybackModel = (
     foliaOverrides: EffectiveFoliaOverrides = NO_FOLIA_OVERRIDES,
 ): EffectivePlaybackModel => {
     const backend = useActivePlaybackBackendStore(state => state.activeBackend);
-    const appleMusicStatus = useAppleMusicSmtcStore(state => state.status);
+    const appleMusicStatus = useExternalMediaStore(state => state.status);
 
     // ---- folia：display 层，不是 raw 层。混音交接期 picture 属于 outgoing deck ----
     const foliaSong = usePlaybackStore(selectDisplaySong);
@@ -86,15 +91,13 @@ export const useEffectivePlaybackModel = (
     const foliaDurationSec = usePlaybackStore(selectDisplayDuration);
     const foliaCoverUrl = usePlaybackStore(selectDisplayCoverUrl);
 
-    const availability: AppleMusicAvailability = !appleMusicStatus?.bridgeAvailable
-        ? 'unavailable'
-        : appleMusicStatus.connected ? 'connected' : 'not-running';
+    const availability = resolveExternalMediaAvailability(appleMusicStatus);
 
-    const appleMusicModel = useMemo(() => buildAppleMusicEffectiveModel(
+    const externalMediaModel = useMemo(() => buildExternalMediaEffectiveModel(
         {
             bridgeAvailable: appleMusicStatus?.bridgeAvailable === true,
             connected: appleMusicStatus?.connected === true,
-            hasMedia: hasAppleMusicMedia(appleMusicStatus),
+            hasMedia: hasExternalMedia(appleMusicStatus),
             title: appleMusicStatus?.title ?? null,
             artist: appleMusicStatus?.artist ?? null,
             album: appleMusicStatus?.album ?? null,
@@ -104,11 +107,14 @@ export const useEffectivePlaybackModel = (
         },
         availability,
         appleMusicStatus?.sourceAppUserModelId ?? null,
-    ), [appleMusicStatus, availability]);
+        // next/previous 由 Folia 的 queue 决定，而不是由外部播放器决定，因此这三个值必须与
+        // folia 分支同源、由调用方传入（见 utils/effectivePlayback.ts 的说明）。
+        foliaOverrides,
+    ), [appleMusicStatus, availability, foliaOverrides]);
 
-    const positionSec = useEffectivePositionSec(backend, appleMusicModel.positionSec);
+    const positionSec = useEffectivePositionSec(backend, externalMediaModel.positionSec);
 
-    if (backend !== 'folia') return appleMusicModel;
+    if (backend !== 'folia') return externalMediaModel;
 
     return {
         backend: 'folia',
@@ -124,7 +130,9 @@ export const useEffectivePlaybackModel = (
         canGoPrevious: foliaOverrides.canGoPrevious,
         canGoNext: foliaOverrides.canGoNext,
         controlsDisabled: foliaOverrides.controlsDisabled,
-        availability: 'connected',
+        // Folia 后端没有任何外部前置条件，因此恒为 `ready` —— 它不是"外部媒体已就绪"的断言，
+        // 而是"这个后端此刻没有未满足的前置条件"。UI 只对 external-media 分支渲染前置条件提示。
+        availability: 'ready',
     };
 };
 

@@ -2,7 +2,7 @@
 //
 // One-shot real-Electron acceptance run for the Apple Music SMTC chain:
 //
-//   read  : folia-apple-music-smtc-helper.exe -> electron/appleMusicSmtcBridge.cjs -> IPC
+//   read  : folia-apple-music-smtc-helper.exe -> electron/externalMediaSmtcBridge.cjs -> IPC
 //           -> preload.cjs -> renderer
 //   write : renderer -> preload.cjs -> IPC -> bridge stdin -> helper -> SMTC Try* -> Apple Music
 //
@@ -213,7 +213,7 @@ async function main() {
   );
   console.log(`[verify] renderer pulled state via preload  : ${hasPull ? 'YES' : 'no'}`);
   console.log(`[verify] renderer received pushed changes   : ${hasPush ? `YES (${pushCount})` : 'no'}`);
-  console.log(`[verify] a real Apple Music session was read: ${connected ? 'YES' : 'no'}`);
+  console.log(`[verify] a real media session was read     : ${connected ? 'YES' : 'no'}`);
   if (!readPhaseFinished) console.log('[verify] note: the read probe never reported completion');
   if (anyError) console.log('[verify] note: at least one probe call reported a failure');
 

@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Folia Companion for Apple Music Web",
+  "version": "0.2.0",
+  "minimum_chrome_version": "116",
+  "description": "Folia companion extension. Drives the Apple Music web player at music.apple.com for the Folia desktop app, so Folia can control it and read what is playing. Does not touch DRM or media streams.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://music.apple.com/*"],
+      "js": ["musickit-time.js", "page-bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://music.apple.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_title": "Folia Companion"
+  }
+}

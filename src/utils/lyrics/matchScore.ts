@@ -16,6 +16,54 @@ const SCORE_WEIGHTS = {
 } as const;
 const AUTO_MATCH_COMPONENT_MISS_SCORE_CAP = 74;
 
+/**
+ * A cross-script artist pair counts as neutral when the title is essentially identical.
+ *
+ * The problem this solves is measured, not hypothetical. Apple Music reports a Japanese artist in
+ * romaji while the Chinese providers hold the same act under its native name:
+ *
+ *     target "林ゆうき"  vs  search "Yuki Hayashi"   -> 67, artistMatched false  (before this)
+ *
+ * `normalizeLyricMatchText` already romanizes kana (`トゲナシトゲアリ` -> `togenashitogeari` matches
+ * `TOGENASHI TOGEARI`, score 88), so kana was never the gap — which is why the check below is about
+ * **Han characters only**. Kanji/hanzi is the part with no phonetic information to transliterate:
+ * `林` has no reading recoverable from the string, and nothing short of a name dictionary can
+ * produce `Hayashi`. What is left is a comparison that cannot be made — one side Han without Latin,
+ * the other Latin without Han — and the two share no characters to score.
+ *
+ * "Cannot compare" must not be spent as "contradicts". Returning the neutral value keeps the artist
+ * component out of the verdict, and the tight title floor is what keeps that from becoming a free
+ * pass: a cross-script candidate still needs a near-exact title, and still has to reach
+ * `AUTO_MATCH_MIN_SCORE` on the title and album alone.
+ */
+const CROSS_SCRIPT_NEUTRAL_ARTIST_SIMILARITY = 0.5;
+const CROSS_SCRIPT_TITLE_FLOOR = 0.9;
+
+/**
+ * Han characters only — deliberately NOT the kana ranges.
+ *
+ * Kana is phonetic, so `wanakana.toRomaji` (already inside `normalizeLyricMatchText`) makes a
+ * kana-vs-romaji pair fully comparable; treating kana as "CJK" here would wrongly declare the
+ * commonest Japanese case unjudgeable and hand it a free artist point.
+ */
+const hasHan = (value: string): boolean => /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u.test(value);
+const hasLatin = (value: string): boolean => /[a-z]/i.test(value);
+
+/**
+ * True when the two artist strings are written in scripts that share no comparable characters.
+ *
+ * Only the pure cases count: one side Han with no Latin at all, the other Latin with no Han. A mixed
+ * string like `Mili (ミリー)` or `*Luna, ゆある, ねんね` shares characters with both worlds, so it is
+ * compared normally.
+ */
+export const isCrossScriptArtistPair = (target: string, search: string): boolean => {
+    const targetHanOnly = hasHan(target) && !hasLatin(target);
+    const searchHanOnly = hasHan(search) && !hasLatin(search);
+    const targetLatinOnly = hasLatin(target) && !hasHan(target);
+    const searchLatinOnly = hasLatin(search) && !hasHan(search);
+    return (targetHanOnly && searchLatinOnly) || (searchHanOnly && targetLatinOnly);
+};
+
 export type MatchScoreDetails = {
     score: number;
     titleScore: number;
@@ -93,8 +141,15 @@ function calculateDurationScore(targetDurationMs: number, searchDurationMs: numb
     multiplier: number;
     matched: boolean | null;
 } {
+    // Either side missing a duration is "cannot compare", not "does not match".
+    //
+    // This used to return 0.9, which quietly cost a perfect match ten points: an Aimer/Aimer title+artist
+    // hit with no duration on either side scored 90 instead of 100. That is the difference between
+    // clearing AUTO_MATCH_MIN_SCORE and missing it for every track whose provider never states a
+    // length, and it is charged for a fact neither side could report. `matched: null` still records
+    // that the duration was not compared, so nothing downstream reads this as a verified match.
     if (targetDurationMs <= 0 || searchDurationMs <= 0) {
-        return { multiplier: 0.9, matched: null };
+        return { multiplier: 1, matched: null };
     }
 
     const diff = Math.abs(targetDurationMs - searchDurationMs);
@@ -165,9 +220,16 @@ export function calculateMatchScoreDetails(
     const titleSimilarity = stringSimilarity(song.title, searchTitle, normalizeTitleForMatch);
     const titleScore = titleSimilarity * SCORE_WEIGHTS.title;
 
-    const artistSimilarity = song.artist.trim()
+    const artistSimilarityRaw = song.artist.trim()
         ? calculateArtistSimilarity(song.artist, searchArtist)
         : 1;
+    // See CROSS_SCRIPT_NEUTRAL_ARTIST_SIMILARITY: an unjudgeable artist pair is neutral rather than
+    // negative, and only under a near-exact title.
+    const artistSimilarity = song.artist.trim()
+        && titleSimilarity >= CROSS_SCRIPT_TITLE_FLOOR
+        && isCrossScriptArtistPair(song.artist, searchArtist)
+        ? Math.max(artistSimilarityRaw, CROSS_SCRIPT_NEUTRAL_ARTIST_SIMILARITY)
+        : artistSimilarityRaw;
     const artistScore = artistSimilarity * SCORE_WEIGHTS.artist;
 
     const hasTargetAlbum = Boolean(song.album?.trim());

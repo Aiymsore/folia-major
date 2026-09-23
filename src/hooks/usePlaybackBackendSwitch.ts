@@ -1,16 +1,16 @@
 import type { OnlineProviderId } from '../types/onlineMusic';
-import { claimAppleMusicBackend, claimFoliaBackend } from './useTransportDispatcher';
+import { claimExternalMediaBackend, claimFoliaBackend } from './useTransportDispatcher';
 
 // src/hooks/usePlaybackBackendSwitch.ts
 // 显式 backend 切换的两个**用户操作**入口。
 //
 // 本轮的硬性产品规则（不是自动抢占，全部由用户操作触发）：
-//   * 选择 Apple Music：若 Folia 正在播，best-effort 暂停 Folia → backend = 'apple-music'。
+//   * 选择 Apple Music：若 Folia 正在播，best-effort 暂停 Folia → backend = 'external-media'。
 //     **不自动 play Apple Music**，它保持自己原来的 Playing/Paused。
 //   * 选择任意 Folia 原生平台：若 Apple Music 正在播，best-effort SMTC pause → backend = 'folia'
 //     → 然后继续原有 provider 选择流程。**不自动 resume Folia**。
 //   * 进入 Stage：与「切回 folia」同一套动作，保证
-//     `activePlaybackContext === 'stage' && activeBackend === 'apple-music'` 永不稳定成立。
+//     `activePlaybackContext === 'stage' && activeBackend === 'external-media'` 永不稳定成立。
 //
 // best-effort 的含义：任何一步失败都不阻塞切换，最终 backend 始终由用户操作决定。
 
@@ -20,7 +20,7 @@ import { claimAppleMusicBackend, claimFoliaBackend } from './useTransportDispatc
  * Folia 侧的暂停用 raw `playerState` 判断（不是 display 层）：混音交接期 display 是 PLAYING，
  * 但 raw 才是"这台机器上的 deck 现在有没有在出声"的判据，而这里要的就是别让两个播放器同时出声。
  */
-export const selectAppleMusicBackend = (pauseFolia: () => void, foliaPlayerState: string): void => {
+export const selectExternalMediaBackend = (pauseFolia: () => void, foliaPlayerState: string): void => {
     if (foliaPlayerState === 'PLAYING') {
         try {
             pauseFolia();
@@ -29,7 +29,7 @@ export const selectAppleMusicBackend = (pauseFolia: () => void, foliaPlayerState
         }
     }
     // 刻意不发送 Apple Music 的 play：切换只改控制目标，不启动新后端。
-    claimAppleMusicBackend();
+    claimExternalMediaBackend();
 };
 
 /** 选中 Folia 后端（随后由调用方继续原有的 provider 选择流程）。 */
@@ -47,7 +47,7 @@ export const selectFoliaBackend = (): void => {
  * 顺序与切回 folia 一致，且必须在 `setActiveBackend` **之前**发 pause —— 此刻 session 仍然有效。
  * 返回是否真的发生了让位，便于调用方记录/测试。
  */
-export const leaveAppleMusicForStage = (): boolean => {
+export const leaveExternalMediaForStage = (): boolean => {
     const switched = claimFoliaBackend();
     return switched;
 };
@@ -58,7 +58,7 @@ export const leaveAppleMusicForStage = (): boolean => {
  * 参数就是 `isStageActive` 本身，不取反：这个函数曾经写成 `!isStageActive` 却收 `!isStageActive`，
  * 结果 Stage 不活跃时反而禁用 —— 语义反了的布尔参数正是最容易写错的地方，所以参数名与调用点保持同名。
  */
-export const isAppleMusicSelectable = (isStageActive: boolean): boolean => !isStageActive;
+export const isExternalMediaSelectable = (isStageActive: boolean): boolean => !isStageActive;
 
 /** 供 provider 列表的 `onSelect` 分流使用。 */
-export const isAppleMusicEntryId = (id: OnlineProviderId | 'apple-music'): boolean => id === 'apple-music';
+export const isExternalMediaEntryId = (id: OnlineProviderId | 'external-media'): boolean => id === 'external-media';

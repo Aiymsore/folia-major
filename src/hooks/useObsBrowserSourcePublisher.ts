@@ -135,6 +135,10 @@ export const useObsBrowserSourcePublisher = ({
     // signal, and App.tsx was naming 22 of them purely to forward them to this hook.
     const activePlaybackContext = usePlaybackStore(state => state.activePlaybackContext);
     const currentSong = usePlaybackStore(state => state.currentSong);
+    // 刻意直读 raw 歌词：这个发布面把 currentSong / lyrics / duration / playerState 打成一个
+    // 同源快照发出去（config 里的 hasTrack 就是 `Boolean(currentSong || lyrics)`）。只把歌词换成
+    // 统一入口，会让快照一半是 Folia、一半是 Apple Music —— 那是比「OBS 只镜像 Folia」更糟的状态。
+    // 让整个发布面切到 effective 模型是独立的一件事（Phase 4 之后），不在本轮范围。
     const lyrics = usePlaybackStore(state => state.lyrics);
     const duration = usePlaybackStore(state => state.duration);
     const playerState = usePlaybackStore(state => state.playerState);

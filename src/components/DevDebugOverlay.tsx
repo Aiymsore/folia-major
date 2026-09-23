@@ -4,7 +4,7 @@ import type { ThemeMode, DualTheme, LyricData, LyricAlternateText, LyricBackgrou
 import { sonnetDebugState, type SonnetDebugShotInfo } from './visualizer/sonnet/sonnetDebug';
 import ConsoleLogPanel from './shared/ConsoleLogPanel';
 // import CoverSizeAuditPanel from './shared/CoverSizeAuditPanel';
-import AppleMusicSmtcPanel from './debug/AppleMusicSmtcPanel';
+import ExternalMediaSmtcPanel from './debug/ExternalMediaSmtcPanel';
 import DraggableDebugWindow from './shared/DraggableDebugWindow';
 import { isConsoleCaptureEnabled, subscribeToConsoleLog } from '../utils/consoleLogBuffer';
 
@@ -1008,7 +1008,7 @@ const DevDebugOverlay: React.FC<DevDebugOverlayProps> = ({
                 )}
                 {activeTab === 'applemusic' && (
                     <div className="mt-3 grid gap-3">
-                        <AppleMusicSmtcPanel panelClass={panelClass} />
+                        <ExternalMediaSmtcPanel panelClass={panelClass} />
                     </div>
                 )}
             </div>

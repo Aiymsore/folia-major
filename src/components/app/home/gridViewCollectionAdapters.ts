@@ -13,12 +13,25 @@ import type {
 } from '../../../types/onlineMusic';
 import { buildLocalLibraryIndex, followEntityRedirect } from '../../../utils/localLibraryIndex';
 import { getLocalCoverAssetUrl } from '../../../services/localCoverAssetUrl';
+import type { PlaylistEntry } from '../../../types/playlist';
+import { resolvePlaylistEntrySongs } from '../../../utils/playlistEntry';
+import {
+    getAppleMusicAlbumTracks,
+    getAppleMusicPlaylistTracks,
+    resolveAppleMusicCatalogFields,
+    toAppleMusicSongResult,
+} from '../../../services/appleMusicService';
 
 // src/components/app/home/gridViewCollectionAdapters.ts
 // Converts home-surface collections into small GridView descriptors and resolves non-Netease tracks outside GridView.
 
-export type GridViewCollectionSource = 'online' | 'local' | 'navidrome';
+// `source` names the CONTENT source (where a collection was read from), which is a different axis
+// from the playback backend (`src/types/playbackBackend.ts`). Apple Music stays `'apple-music'`
+// here even though the backend that plays its tracks is now `'external-media'`: browsing the user's
+// Apple Music library is still an Apple Music concern, and the two names must not be conflated.
+export type GridViewCollectionSource = 'online' | 'local' | 'navidrome' | 'apple-music';
 export type NavidromeGridViewCollectionType = 'album' | 'playlist' | 'artist' | 'random' | 'favorites';
+export type AppleMusicGridViewCollectionType = 'album' | 'playlist';
 
 /**
  * 一个集合的稳定身份：来源 + 类型 + id。
@@ -67,6 +80,8 @@ export interface LocalGridViewCollectionDescriptor extends BaseGridViewCollectio
     type: LocalLibraryGroup['type'];
     id: string;
     songIds: string[];
+    /** 跨来源歌单（LocalPlaylist.entries）的条目；有值时曲目以它为准，songIds 仅是本地子集。 */
+    entries?: PlaylistEntry[];
     entityId?: string;
     playlistId?: string;
     isVirtual?: boolean;
@@ -85,10 +100,26 @@ export interface OnlineGridViewCollectionDescriptor extends BaseGridViewCollecti
     raw?: any;
 }
 
+/**
+ * Apple Music collection descriptor.
+ *
+ * Apple Music is deliberately a fourth *collection source* rather than an Omni provider: it has no
+ * `providerId`, so it can never be passed to `switchProvider` or routed through `omni`. That
+ * mirrors the rule recorded in `src/types/playbackBackend.ts` and the `navidromeService` precedent.
+ */
+export interface AppleMusicGridViewCollectionDescriptor extends BaseGridViewCollectionDescriptor {
+    source: 'apple-music';
+    type: AppleMusicGridViewCollectionType;
+    id: string;
+    /** True when the collection comes from the user's library rather than the public catalog. */
+    isLibrary: boolean;
+}
+
 export type GridViewCollectionDescriptor =
     | OnlineGridViewCollectionDescriptor
     | LocalGridViewCollectionDescriptor
-    | NavidromeGridViewCollectionDescriptor;
+    | NavidromeGridViewCollectionDescriptor
+    | AppleMusicGridViewCollectionDescriptor;
 
 const getDisplayName = (name: React.ReactNode) => (
     typeof name === 'string' || typeof name === 'number'
@@ -148,6 +179,7 @@ export const createLocalGridViewCollection = (group: LocalLibraryGroup): LocalGr
     description: group.description,
     trackCount: group.trackCount ?? group.songs.length,
     songIds: group.songs.map(song => song.id),
+    ...(group.entries?.length ? { entries: group.entries } : {}),
     ...(group.entityId ? { entityId: group.entityId } : {}),
     playlistId: group.playlistId,
     isVirtual: group.isVirtual,
@@ -266,6 +298,11 @@ export const resolveLocalGridViewTracks = (
     localSongs: LocalSong[],
     catalog?: { entities: LocalLibraryEntity[]; assignments: LocalLibraryAssignment[]; },
 ): SongResult[] => {
+    // 跨来源歌单：条目即顺序，直接解析成歌曲（含 online/navidrome/external-media）。
+    if (descriptor.entries?.length) {
+        return resolvePlaylistEntrySongs(descriptor.entries, localSongs).songs;
+    }
+
     const songsById = new Map(localSongs.map(song => [song.id, song]));
     const orderedSongs = descriptor.songIds
         .map(songId => songsById.get(songId))
@@ -312,8 +349,7 @@ export const resolveLocalGridViewCoverSource = (
 // Loads Navidrome tracks for GridView without moving Navidrome service logic into GridView itself.
 export const resolveNavidromeGridViewTracks = async (
     descriptor: NavidromeGridViewCollectionDescriptor
-): Promise<SongResult[]> => {
-    const config = getNavidromeConfig();
+): Promise<SongResult[]> => {    const config = getNavidromeConfig();
     if (!config) {
         return [];
     }
@@ -341,6 +377,39 @@ export const resolveNavidromeGridViewTracks = async (
     return buildNavidromeQueue(navidromeSongs);
 };
 
+/**
+ * Loads an Apple Music collection's tracks for GridView.
+ *
+ * The second step is not optional, but its purpose changed with this refactor. Library rows come
+ * back with `a.<n>` as their id and **no `previews` array**, so their `attributes.playParams.catalogId`
+ * has to be exchanged for the catalog resource before anything downstream has an id it can address.
+ * That exchange used to be about finding a preview URL; it is now about finding the **catalog id**,
+ * because `playById` (the extension path that plays full tracks in Chrome) can only address a
+ * catalog id — an `a.<n>` id 404s against the catalog endpoint.
+ *
+ * The rows are still merged with the catalog resource for the fields the library row lacks
+ * (artwork aspect ratio, track number, isrc), so the resolution is not purely an id lookup.
+ *
+ * A failed catalog lookup still returns the rows — they are real, they just have no addressable id
+ * and therefore cannot be played — so a partial Apple outage degrades to "unplayable rows" rather
+ * than an empty page. `isExternalMediaQueueSongPlayable` is what surfaces that per row.
+ */
+export const resolveAppleMusicGridViewTracks = async (
+    descriptor: AppleMusicGridViewCollectionDescriptor,
+    storefront?: string,
+): Promise<SongResult[]> => {
+    const page = descriptor.type === 'album'
+        ? await getAppleMusicAlbumTracks(descriptor.id, { limit: 100 })
+        : await getAppleMusicPlaylistTracks(descriptor.id, { limit: 100 });
+
+    if (!page.ok) {
+        throw new Error(page.message || `Apple Music request failed: ${page.errorKind}`);
+    }
+
+    const resolved = await resolveAppleMusicCatalogFields(page.page.items, storefront);
+    return resolved.map(toAppleMusicSongResult);
+};
+
 export const isLocalGridViewCollection = (
     collection: GridViewCollectionDescriptor
 ): collection is LocalGridViewCollectionDescriptor => collection.source === 'local';
@@ -348,6 +417,31 @@ export const isLocalGridViewCollection = (
 export const isNavidromeGridViewCollection = (
     collection: GridViewCollectionDescriptor
 ): collection is NavidromeGridViewCollectionDescriptor => collection.source === 'navidrome';
+
+export const isAppleMusicGridViewCollection = (
+    collection: GridViewCollectionDescriptor
+): collection is AppleMusicGridViewCollectionDescriptor => collection.source === 'apple-music';
+
+export const createAppleMusicGridViewCollection = (
+    item: {
+        id: string | number;
+        name: string;
+        coverUrl?: string;
+        description?: string;
+        trackCount?: number;
+        isLibrary?: boolean;
+    },
+    type: AppleMusicGridViewCollectionType,
+): AppleMusicGridViewCollectionDescriptor => ({
+    source: 'apple-music',
+    id: String(item.id),
+    name: item.name,
+    type,
+    coverUrl: item.coverUrl,
+    description: item.description,
+    trackCount: item.trackCount,
+    isLibrary: item.isLibrary !== false,
+});
 
 export const isNeteaseGridViewCollection = (
     collection: GridViewCollectionDescriptor

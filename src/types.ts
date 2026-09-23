@@ -1,5 +1,6 @@
 import type { LineRenderHints } from './utils/lyrics/renderHints';
 import type { MediaId, PlaybackSourceRef, ProviderCatalogRef } from './types/onlineMusic';
+import type { PlaylistEntry } from './types/playlist';
 
 export interface LyricRuby {
   text: string;
@@ -120,7 +121,7 @@ export type BuiltinVisualizerMode = 'classic' | 'cadenza' | 'partita' | 'fume' |
 export type VisualizerMode = BuiltinVisualizerMode | (string & {});
 export type VisualizerFrameRate = 'off' | 120 | 90 | 60;
 
-export type HomeViewTab = 'playlist' | 'local' | 'albums' | 'navidrome' | 'radio';
+export type HomeViewTab = 'playlist' | 'local' | 'albums' | 'navidrome' | 'radio' | 'appleMusic';
 
 export type PlaybackContext = 'main' | 'stage';
 export type StageSource = 'stage-api' | 'now-playing' | 'playercap';
@@ -1099,7 +1100,13 @@ export interface NoCopyrightRecommendation {
 }
 
 export type LyricProviderSource = 'netease' | 'qq' | 'kugou' | 'amll';
-export type AmllDbPlatform = 'ncm' | 'qq';
+/**
+ * Platforms AMLL's TTML database is keyed by. `am` is Apple Music, keyed by the *catalog* song id
+ * — verified against the live database, where `/am/1468058171` returns TTML while a library-only
+ * id does not exist. Only the catalog id can be used here; a library row's `a.<n>` id has no
+ * entry.
+ */
+export type AmllDbPlatform = 'ncm' | 'qq' | 'am';
 
 export interface ReplayGainInfo {
   /** ReplayGain gain values in decibels. */
@@ -1135,6 +1142,21 @@ export interface SongResult {
   qqMid?: string;
   kgHash?: string;
   amllDbPlatform?: AmllDbPlatform;
+  /**
+   * External media payload. The track is played by an external media backend
+   * (music.apple.com in Chrome), not by Folia, so these live beside `qqMid` / `kgHash` as
+   * source-specific extras rather than behind `sourceRef`.
+   *
+   * There is deliberately **no preview URL field any more**: the ~90 second preview path was
+   * removed in this refactor. A track is either playable through the external backend
+   * (`externalMediaCatalogId` is what `playById` addresses) or it is not playable at all — the
+   * "preview in Folia's own deck" middle ground no longer exists, and keeping a field for it would
+   * let a stale queued song silently fall back into a playback mode nothing else supports.
+   */
+  externalMediaId?: string;
+  externalMediaCatalogId?: string | null;
+  externalMediaUrl?: string | null;
+  externalMediaHasLyrics?: boolean;
 }
 
 export interface OnlineLyricsState {
@@ -1250,6 +1272,13 @@ export interface LocalPlaylist {
   id: string;
   name: string;
   songIds: string[];
+  /**
+   * 跨来源歌单条目（netease/kugou/qq/navidrome/external-media/local 都能进同一歌单）。
+   * 只存身份 + 最小可回放字段 + 展示元数据（见 `types/playlist.ts`）。
+   * 向后兼容：纯本地歌单仍只有 `songIds`；`entries` 存在时以它为准（顺序即歌单顺序），
+   * `songIds` 仅作旧读者的本地子集视图。
+   */
+  entries?: PlaylistEntry[];
   createdAt: number;
   updatedAt: number;
   isFavorite?: boolean;
@@ -1261,6 +1290,8 @@ export interface LocalLibraryGroup {
   type: LocalLibraryGroupType;
   name: string;
   songs: LocalSong[];
+  /** 跨来源歌单（LocalPlaylist.entries）的条目；有值时歌曲列表以它为准。 */
+  entries?: PlaylistEntry[];
   coverUrl?: string | Blob;
   id: string;
   isVirtual?: boolean;

@@ -4,11 +4,16 @@ import type { MotionValue } from 'framer-motion';
 import { findLatestActiveLineIndex } from '../utils/appPlaybackHelpers';
 import { PlayerState } from '../types';
 import type { AudioBands, LyricData } from '../types';
-import { setCurrentLineIndex, setPlayerState } from '../stores/usePlaybackStore';
-import { selectDisplayLyrics, usePlaybackStore } from '../stores/usePlaybackStore';
+import { setCurrentLineIndex, setPlayerState, usePlaybackStore } from '../stores/usePlaybackStore';
+import { useDisplayLyrics } from './useDisplayLyrics';
 import { useActivePlaybackBackendStore } from '../stores/useActivePlaybackBackendStore';
-import { useAppleMusicSmtcStore } from '../stores/useAppleMusicSmtcStore';
-import { resolveAppleMusicClockSec } from '../utils/appleMusicSmtcStatus';
+import { useExternalMediaStore } from '../stores/useExternalMediaStore';
+import {
+    externalMediaClockNow,
+    resolveCurrentExternalMediaLineIndex,
+    runExternalMediaClockTick,
+    type ExternalMediaClockTickInput,
+} from '../utils/externalMediaClockRuntime';
 import type { PlaybackBackend } from '../types/playbackBackend';
 import { audioBands, audioPower, currentTime, lyricCurrentTime } from '../stores/motionSignals';
 
@@ -50,31 +55,22 @@ type UsePlaybackVisualizerBridgeParams = {
 };
 
 /**
- * 「Apple Music 拥有传输权时,把 SMTC 位置写进全局播放时钟」。返回本帧是否写了。
+ * 「Apple Music 拥有传输权时，把 SMTC 位置写进全局播放时钟」。返回本帧是否写了。
  *
- * 从 RAF 循环里提出来,是为了让这条支路能被真正执行地断言(而不是只读源码):
- * motion signal 是模块级的,所以调用它就能观察 `currentTime` / `lyricCurrentTime` 的值。
+ * 实现已经搬到 `utils/externalMediaClockRuntime.ts`（那里持有校正状态机），这里保留同一个签名与语义，
+ * 使这条支路既能在既有单测里被真正执行地断言，也让 RAF 循环只负责「喂输入、读输出」。
  *
- * 三条语义,与 `resolveAppleMusicClockSec` 的判据一一对应:
- *   * `null`(后端不是 apple-music,或快照没有位置)→ 一个字节都不写,时钟仍由原有四分支持有。
- *     这条正是"迟到的 SMTC 快照不会覆盖正在播放的 Folia deck 位置"的保证。
- *   * 已知位置 → 写 `currentTime`(秒),并按同一 offset 规则写歌词时钟。
- *   * 只读镜像:不写 playback store、不碰 audio 元素、不改 backend。
+ * `clock` 可注入，用于不想触碰模块级状态的调用方；默认就是带校正的运行时。
  */
-export const applyAppleMusicClockTick = (
+export const applyExternalMediaClockTick = (
     backend: PlaybackBackend,
     positionMs: number | null | undefined,
     lyricTimelineOffsetMs: number,
-): boolean => {
-    const positionSec = resolveAppleMusicClockSec(backend, positionMs);
-    if (positionSec === null) {
-        return false;
-    }
-
-    currentTime.set(positionSec);
-    lyricCurrentTime.set(positionSec - lyricTimelineOffsetMs / 1000);
-    return true;
-};
+    playbackStatus: string | null = 'Playing',
+    clock: (input: ExternalMediaClockTickInput) => boolean = runExternalMediaClockTick,
+    now: () => number = externalMediaClockNow,
+    lastUpdatedAtMs: number | null = null,
+): boolean => clock({ backend, positionMs, playbackStatus, lyricTimelineOffsetMs, nowMs: now(), lastUpdatedAtMs });
 
 // Runs the requestAnimationFrame loop for audio-reactive visuals and lyric timing.
 export function usePlaybackVisualizerBridge({
@@ -101,7 +97,7 @@ export function usePlaybackVisualizerBridge({
     const playerState = usePlaybackStore(state => state.playerState);
     const duration = usePlaybackStore(state => state.duration);
     // The lyrics on screen, matching the deck getDisplayElement points at.
-    const lyrics = usePlaybackStore(selectDisplayLyrics);
+    const lyrics = useDisplayLyrics();
     // Phase 3A: the four clock sources below all describe a Folia deck or a Stage session, so in the
     // Apple Music backend not one of them fires - which is why the progress bar sat at 00:00 and a
     // completed drag never became visible anywhere. The SMTC snapshot is the fifth source, and this
@@ -113,7 +109,7 @@ export function usePlaybackVisualizerBridge({
     // exact restart-per-tick pattern frontend-runtime-guardrails forbids. Refs keep one continuous
     // loop that always sees the newest values.
     const backend = useActivePlaybackBackendStore(state => state.activeBackend);
-    const appleMusicStatus = useAppleMusicSmtcStore(state => state.status);
+    const appleMusicStatus = useExternalMediaStore(state => state.status);
     const backendRef = useRef(backend);
     const appleMusicStatusRef = useRef(appleMusicStatus);
     backendRef.current = backend;
@@ -184,16 +180,47 @@ export function usePlaybackVisualizerBridge({
         //
         // The snapshot arrives on the store at roughly 1Hz (the helper polls every 500ms and gates on
         // content, and Apple Music quantizes its position to whole seconds), so the bar steps about
-        // once a second. That is the data source's own resolution, not a smoothing choice:
-        // interpolating between coarse anchors is the lyric-clock task, and faking it here would
-        // publish a position the OS never reported.
-        if (backendRef.current === 'apple-music') {
+        // once a second. That is the data source's own resolution, not a smoothing choice: the bar
+        // steps because the OS reports integer seconds, and the lyric read-head is computed from
+        // those same reported values. Interpolating between coarse anchors is a separate layer
+        // (docs/apple-music-lyric-clock.md) and belongs there, not here - faking a position the OS
+        // never reported would make the clock disagree with the data everything else is derived from.
+        if (backendRef.current === 'external-media') {
             // 本帧时钟归 SMTC：下面四个 Folia / Stage 来源必须让位。
-            applyAppleMusicClockTick(
+            //
+            // 写进去的不是原始 `positionMs`，而是校正状态机的输出（锚点 + 单调时钟 + 低增益相位修正，
+            // 并把整秒量化与发布滞后摊平）。细节与实测依据见
+            // docs/apple-music-lyric-clock.md。这里只负责喂输入、读输出。
+            //
+            // `lastUpdatedAt` 是操作系统给这个位置值盖的时间戳：有了它，锚点年龄是**算出来的**，
+            // 周期内斜坡随之消失；没有它（老 helper、时间轴读不到）校正层退化成用 leadMs 估计，
+            // 行为与之前一致。
+            applyExternalMediaClockTick(
                 backendRef.current,
                 appleMusicStatusRef.current?.positionMs,
                 lyricTimelineOffsetMs,
+                appleMusicStatusRef.current?.playbackStatus ?? null,
+                runExternalMediaClockTick,
+                externalMediaClockNow,
+                appleMusicStatusRef.current?.lastUpdatedAt ?? null,
             );
+
+            // 歌词读头。这里曾经缺失，后果比「进度条不动」更隐蔽：`lyricCurrentTime` 被写对了，
+            // 但 `currentLineIndex` 从没人更新，于是 Apple Music 下歌词高亮整首停在第一行 ——
+            // 时钟是对的，读头是死的。四个 Folia 分支都做这件事，这条也必须做。
+            //
+            // 之所以不必在这里比对曲目身份：`useDisplayLyrics()` 是**后端排他**的，apple-music
+            // 后端下它只会给出 Apple Music 自己的歌词（folia 侧取值被
+            // `selectDisplayLyricsForBackend` 强制为 null），所以「歌词属于谁」与「时钟属于谁」
+            // 在结构上一致。交接期的 outgoing-deck 歌词不会漏进来。
+            //
+            // 只在真的换行时写 state：读头是离散整数，但每帧无条件 setState 仍是 guardrails
+            // 明确禁止的高频更新。首次进入 apple-music 时也走这里（ref 初值 -1）。
+            const foundIndex = resolveCurrentExternalMediaLineIndex(lyrics);
+            if (foundIndex !== currentLineIndexRef.current) {
+                currentLineIndexRef.current = foundIndex;
+                setCurrentLineIndex(foundIndex);
+            }
         } else if (isActuallyPlaying && audioElement) {
             const time = audioElement.currentTime;
             currentTime.set(time);

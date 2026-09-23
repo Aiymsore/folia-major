@@ -131,7 +131,7 @@ export const useMediaSessionBridge = ({
         // prevent are "stale", not "missing": leaving the previous Folia title up, and leaving the
         // previous Folia artwork up. There are no thumbnail bytes this phase, so the artwork is
         // deliberately empty rather than reused.
-        if (backend === 'apple-music') {
+        if (backend === 'external-media') {
             try {
                 if (!effectiveSong) {
                     navigator.mediaSession.setPositionState();

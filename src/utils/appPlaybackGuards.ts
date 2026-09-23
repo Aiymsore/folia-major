@@ -46,9 +46,27 @@ export const isStagePlaybackSong = (song: SongResult | null | undefined): boolea
     return Boolean(song && (song.sourceRef?.kind === 'stage' || (song as any).isStage === true));
 };
 
+/**
+ * True for an Apple Music preview track.
+ *
+ * Detected from `sourceRef.kind` when present, falling back to the payload marker so a song that
+ * was persisted before its ref was normalized is still recognized. It must be checked BEFORE
+ * `isLocalPlaybackSong`, which would otherwise treat it as local on the strength of `sourceRef`
+ * alone.
+ */
+export const isExternalMediaPlaybackSong = (
+    song: SongResult | null | undefined
+): song is SongResult & { externalMediaId: string } => {
+    return Boolean(
+        song
+        && (song.sourceRef?.kind === 'external-media' || Boolean((song as any).externalMediaId))
+    );
+};
+
 export const getPlaybackSourceRef = (song: SongResult): PlaybackSourceRef => {
     if (song.sourceRef) return song.sourceRef;
     if (isStagePlaybackSong(song)) return { kind: 'stage', mediaId: String(song.id) };
+    if (isExternalMediaPlaybackSong(song)) return { kind: 'external-media', mediaId: String(song.id) };
     if (isLocalPlaybackSong(song)) return { kind: 'local', mediaId: song.localRef.songId };
     if (isNavidromePlaybackSong(song)) {
         const carrier = resolveNavidromePlaybackCarrier(song);
@@ -87,13 +105,16 @@ export const getPlaybackSongSource = (song: SongResult): PlaybackSongSource => {
 };
 
 // Builds a collision-safe identity for queue operations across all playback sources.
-export const getPlaybackSongKey = (song: SongResult): string => {
-    const sourceRef = getPlaybackSourceRef(song);
+export const getPlaybackSourceRefKey = (sourceRef: PlaybackSourceRef): string => {
     if (sourceRef.kind === 'online') {
         return `online:${sourceRef.providerId}:${sourceRef.mediaId}`;
     }
     return `${sourceRef.kind}:${sourceRef.mediaId}`;
 };
+
+export const getPlaybackSongKey = (song: SongResult): string => (
+    getPlaybackSourceRefKey(getPlaybackSourceRef(song))
+);
 
 export const isSamePlaybackSong = (
     first: SongResult | null | undefined,

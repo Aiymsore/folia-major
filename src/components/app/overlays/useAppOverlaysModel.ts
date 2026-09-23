@@ -8,9 +8,9 @@ import { useStageSettingsStore } from '../../../stores/useStageSettingsStore';
 import { usePlayerChromeSettingsStore } from '../../../stores/usePlayerChromeSettingsStore';
 import { useTranslation } from 'react-i18next';
 import {
-    selectDisplayLyrics,
     usePlaybackStore,
 } from '../../../stores/usePlaybackStore';
+import { useDisplayLyrics } from '../../../hooks/useDisplayLyrics';
 import { useEffectivePlaybackModel } from '../../../hooks/useEffectivePlayback';
 import { resolveLikeAvailability } from '../../../utils/playerLikeAvailability';
 import { buildAppOverlaysModel, type AppOverlaysDeps, type AppOverlaysModel } from './buildAppOverlaysModel';
@@ -23,7 +23,7 @@ const MEMORY_MONITOR_SHORTCUT_LABEL = 'Alt+Shift+M';
  * 生效时长交给 overlay 模型时**不做任何换算**，两个后端共用同一条秒契约：
  *   * `effective.durationSec` 永远是秒 —— Folia 的 `selectDisplayDuration` 本身就是秒
  *     （`store.duration` 来自 `HTMLAudioElement.duration`）；Apple Music 的 SMTC `durationMs`
- *     已在 `buildAppleMusicEffectiveModel` 里 `/ 1000`；
+ *     已在 `buildExternalMediaEffectiveModel` 里 `/ 1000`；
  *   * 下游 `FloatingPlayerControls` → `ProgressBar` → `formatTime` 也全部按秒，与 motion signal
  *     `currentTime`（秒）同标尺。
  *
@@ -69,11 +69,11 @@ export const useAppOverlaysModel = (deps: AppOverlaysDeps): AppOverlaysModel => 
     // The held picture, not the live one: a blend keeps song, lyrics, duration and cover describing
     // the same track for its whole length. See the note on `coverUrl` above.
     //
-    // Phase 3A: song / cover / duration / playerState come from the effective model, so this single
-    // seam switches the whole player surface between the two backends. `displayLyrics` stays Folia's
-    // display selector: the Apple Music backend carries no lyrics this phase, and the effective
-    // model reports none rather than the previous track's lines.
-    const displayLyrics = usePlaybackStore(selectDisplayLyrics);
+    // Phase 3A/Phase 4: song / cover / duration / playerState come from the effective model, and
+    // lyrics come from the unified `useDisplayLyrics()` entry, so this single seam switches the whole
+    // player surface between the two backends. `useDisplayLyrics` returns Folia's display selector in
+    // the folia backend and the Apple Music store in the apple-music backend — never the other one.
+    const displayLyrics = useDisplayLyrics();
     const effective = useEffectivePlaybackModel();
     const displaySong = effective.song;
     const displayCoverUrl = effective.coverUrl;

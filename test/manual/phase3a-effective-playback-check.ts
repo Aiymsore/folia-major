@@ -14,12 +14,12 @@
 //   node "$env:TEMP/phase3a-check.mjs"
 import { PlayerState } from '../../src/types';
 import {
-    buildAppleMusicEffectiveModel,
-    buildAppleMusicPseudoSong,
-    mapAppleMusicPlayerState,
-    type AppleMusicEffectiveInput,
+    buildExternalMediaEffectiveModel,
+    buildExternalMediaPseudoSong,
+    mapExternalMediaPlayerState,
+    type ExternalMediaEffectiveInput,
 } from '../../src/utils/effectivePlayback';
-import { hasAppleMusicMedia, resolveAppleMusicAvailability } from '../../src/utils/appleMusicSmtcStatus';
+import { hasExternalMedia, resolveExternalMediaAvailability } from '../../src/utils/externalMediaStatus';
 import { buildPlaybackSyncBridgeModel } from '../../src/utils/playbackSyncBridge';
 
 let failures = 0;
@@ -37,7 +37,7 @@ const eq = (label: string, actual: unknown, expected: unknown) => {
     check(label, JSON.stringify(actual) === JSON.stringify(expected), `got ${JSON.stringify(actual)}`);
 };
 
-const input = (over: Partial<AppleMusicEffectiveInput> = {}): AppleMusicEffectiveInput => ({
+const input = (over: Partial<ExternalMediaEffectiveInput> = {}): ExternalMediaEffectiveInput => ({
     bridgeAvailable: true,
     connected: true,
     hasMedia: true,
@@ -50,11 +50,11 @@ const input = (over: Partial<AppleMusicEffectiveInput> = {}): AppleMusicEffectiv
     ...over,
 });
 
-const status = (over: Partial<ElectronAppleMusicSmtcStatus> = {}): ElectronAppleMusicSmtcStatus => ({
+const status = (over: Partial<ElectronExternalMediaStatus> = {}): ElectronExternalMediaStatus => ({
     bridgeAvailable: true,
     helperState: 'running',
     connected: true,
-    sourceAppUserModelId: 'AppleInc.AppleMusicWin_nzyj5cx40ttqa!App',
+    sourceAppUserModelId: 'Chrome',
     title: 'Track',
     artist: 'Artist',
     album: null,
@@ -63,73 +63,85 @@ const status = (over: Partial<ElectronAppleMusicSmtcStatus> = {}): ElectronApple
     durationMs: 240_000,
     hasThumbnail: true,
     updatedAt: 1,
+    lastUpdatedAt: 1,
     lastEventAt: 1,
     sessionCount: 2,
+    extensionConnected: true,
+    extensionVersion: '1.0.0',
+    extensionCapabilities: ['observe', 'transport', 'seek', 'playById'],
+    pageReady: null,
+    signedIn: true,
+    storefrontMatches: true,
     lastCommand: null,
     lastError: null,
     ...over,
 });
 
 console.log('SMTC 判据');
-eq('Playing 有媒体', hasAppleMusicMedia(status()), true);
-eq('Paused 有媒体', hasAppleMusicMedia(status({ playbackStatus: 'Paused' })), true);
-eq('Stopped 仍有媒体（曲目要留在界面上）', hasAppleMusicMedia(status({ playbackStatus: 'Stopped' })), true);
-eq('Opened 仍有媒体', hasAppleMusicMedia(status({ playbackStatus: 'Opened' })), true);
-eq('Changing 仍有媒体', hasAppleMusicMedia(status({ playbackStatus: 'Changing' })), true);
-eq('无标题则无媒体', hasAppleMusicMedia(status({ title: null })), false);
-eq('空白标题则无媒体', hasAppleMusicMedia(status({ title: '   ' })), false);
-eq('无 session 则无媒体', hasAppleMusicMedia(status({ connected: false })), false);
-eq('null 无媒体', hasAppleMusicMedia(null), false);
-eq('三态 unavailable', resolveAppleMusicAvailability(status({ bridgeAvailable: false })), 'unavailable');
-eq('三态 not-running', resolveAppleMusicAvailability(status({ connected: false })), 'not-running');
-eq('三态 connected', resolveAppleMusicAvailability(status()), 'connected');
+eq('Playing 有媒体', hasExternalMedia(status()), true);
+eq('Paused 有媒体', hasExternalMedia(status({ playbackStatus: 'Paused' })), true);
+eq('Stopped 仍有媒体（曲目要留在界面上）', hasExternalMedia(status({ playbackStatus: 'Stopped' })), true);
+eq('Opened 仍有媒体', hasExternalMedia(status({ playbackStatus: 'Opened' })), true);
+eq('Changing 仍有媒体', hasExternalMedia(status({ playbackStatus: 'Changing' })), true);
+eq('无标题则无媒体', hasExternalMedia(status({ title: null })), false);
+eq('空白标题则无媒体', hasExternalMedia(status({ title: '   ' })), false);
+eq('无 session 则无媒体', hasExternalMedia(status({ connected: false })), false);
+eq('null 无媒体', hasExternalMedia(null), false);
+eq('六态 unavailable', resolveExternalMediaAvailability(status({ bridgeAvailable: false })), 'unavailable');
+eq('六态 extension-missing', resolveExternalMediaAvailability(status({ extensionConnected: false })), 'extension-missing');
+eq('六态 tab-not-found', resolveExternalMediaAvailability(status({ connected: false })), 'tab-not-found');
+eq('六态 player-not-ready', resolveExternalMediaAvailability(status({ pageReady: false })), 'player-not-ready');
+eq('六态 not-signed-in', resolveExternalMediaAvailability(status({ signedIn: false })), 'not-signed-in');
+eq('六态 storefront-mismatch', resolveExternalMediaAvailability(status({ storefrontMatches: false })), 'storefront-mismatch');
+eq('六态 ready', resolveExternalMediaAvailability(status()), 'ready');
 
 console.log('\nPlayerState 映射');
-eq('Playing', mapAppleMusicPlayerState('Playing'), PlayerState.PLAYING);
-eq('Paused', mapAppleMusicPlayerState('Paused'), PlayerState.PAUSED);
+eq('Playing', mapExternalMediaPlayerState('Playing'), PlayerState.PLAYING);
+eq('Paused', mapExternalMediaPlayerState('Paused'), PlayerState.PAUSED);
 for (const value of ['Closed', 'Stopped', 'Opened', 'Changing', 'Unknown(99)', null]) {
-    eq(`${String(value)} → IDLE`, mapAppleMusicPlayerState(value), PlayerState.IDLE);
+    eq(`${String(value)} → IDLE`, mapExternalMediaPlayerState(value), PlayerState.IDLE);
 }
 
 console.log('\n硬约束 4：无有效媒体时不得暴露伪 Song');
 {
-    const model = buildAppleMusicEffectiveModel(
+    const model = buildExternalMediaEffectiveModel(
         input({ hasMedia: false, playbackStatus: 'Closed', title: null }),
-        'connected',
-        'aumid',
+        'ready',
+        'Chrome',
     );
     eq('song 为 null', model.song, null);
     eq('hasTrack=false', model.hasTrack, false);
     eq('playerState=IDLE', model.playerState, PlayerState.IDLE);
     eq('controlsDisabled=true', model.controlsDisabled, true);
-    eq('canGoPrevious=false', model.canGoPrevious, false);
-    eq('canGoNext=false', model.canGoNext, false);
+    eq('邻居默认 null（由调用方的 queue 决定）', model.canGoPrevious, null);
+    eq('canGoNext 默认 null', model.canGoNext, null);
     eq('position 归零', model.positionSec, 0);
 }
 
 console.log('\nsession / media / state 三者分离：Stopped / Opened 仍有曲目且 Play 可用');
 {
-    const stopped = buildAppleMusicEffectiveModel(
+    const stopped = buildExternalMediaEffectiveModel(
         input({ playbackStatus: 'Stopped', positionMs: 0 }),
-        'connected',
-        'aumid',
+        'ready',
+        'Chrome',
+        { canGoPrevious: false, canGoNext: true, controlsDisabled: false },
     );
     eq('Stopped 保留曲目', stopped.song?.name, 'Track');
     eq('Stopped hasTrack=true', stopped.hasTrack, true);
     eq('Stopped 状态映射 IDLE', stopped.playerState, PlayerState.IDLE);
     eq('Stopped 不禁用 transport', stopped.controlsDisabled, false);
-    eq('Stopped 仍可 next', stopped.canGoNext, true);
+    eq('Stopped 仍可 next（queue 里有邻居）', stopped.canGoNext, true);
 
-    const opened = buildAppleMusicEffectiveModel(input({ playbackStatus: 'Opened' }), 'connected', 'aumid');
+    const opened = buildExternalMediaEffectiveModel(input({ playbackStatus: 'Opened' }), 'ready', 'Chrome');
     eq('Opened 保留曲目', opened.hasTrack, true);
     eq('Opened 不禁用 transport', opened.controlsDisabled, false);
 
-    const changing = buildAppleMusicEffectiveModel(input({ playbackStatus: 'Changing' }), 'connected', 'aumid');
+    const changing = buildExternalMediaEffectiveModel(input({ playbackStatus: 'Changing' }), 'ready', 'Chrome');
     eq('Changing 保留曲目', changing.hasTrack, true);
     eq('Changing 不谎报 PLAYING', changing.playerState, PlayerState.IDLE);
 }
 {
-    const disconnected = buildAppleMusicEffectiveModel(
+    const disconnected = buildExternalMediaEffectiveModel(
         input({ bridgeAvailable: false, connected: false, hasMedia: false, title: null }),
         'unavailable',
         null,
@@ -138,7 +150,7 @@ console.log('\nsession / media / state 三者分离：Stopped / Opened 仍有曲
     eq('bridge 不可用 controlsDisabled', disconnected.controlsDisabled, true);
 }
 {
-    const paused = buildAppleMusicEffectiveModel(input({ playbackStatus: 'Paused' }), 'connected', 'aumid');
+    const paused = buildExternalMediaEffectiveModel(input({ playbackStatus: 'Paused' }), 'ready', 'Chrome');
     eq('暂停仍可控', paused.controlsDisabled, false);
     eq('暂停状态正确', paused.playerState, PlayerState.PAUSED);
     eq('封面为空而非回落', paused.coverUrl, null);
@@ -147,16 +159,16 @@ console.log('\nsession / media / state 三者分离：Stopped / Opened 仍有曲
 
 console.log('\n伪 Song 形状');
 {
-    const song = buildAppleMusicPseudoSong(input(), 'AppleInc.AppleMusicWin_nzyj5cx40ttqa!App');
+    const song = buildExternalMediaPseudoSong(input(), 'Chrome');
     eq('无 sourceRef', song?.sourceRef, undefined);
     eq('无 provider 归属', song?.playbackSourceRevision, undefined);
     check('id 为负', Number(song?.id ?? 0) < 0, String(song?.id));
-    const aumid = 'AppleInc.AppleMusicWin_nzyj5cx40ttqa!App';
-    eq('同上曲目 id 稳定', buildAppleMusicPseudoSong(input(), aumid)?.id === song?.id, true);
-    eq('换曲目 id 变化', buildAppleMusicPseudoSong(input({ title: 'Other' }), aumid)?.id !== song?.id, true);
-    eq('换 session 来源 id 变化', buildAppleMusicPseudoSong(input(), 'other-aumid')?.id !== song?.id, true);
-    eq('无媒体信息返回 null', buildAppleMusicPseudoSong(input({ hasMedia: false, title: null }), 'aumid'), null);
-    eq('空标题返回 null', buildAppleMusicPseudoSong(input({ title: null }), 'aumid'), null);
+    const aumid = 'Chrome';
+    eq('同上曲目 id 稳定', buildExternalMediaPseudoSong(input(), aumid)?.id === song?.id, true);
+    eq('换曲目 id 变化', buildExternalMediaPseudoSong(input({ title: 'Other' }), aumid)?.id !== song?.id, true);
+    eq('换 session 来源 id 变化', buildExternalMediaPseudoSong(input(), 'other-aumid')?.id !== song?.id, true);
+    eq('无媒体信息返回 null', buildExternalMediaPseudoSong(input({ hasMedia: false, title: null }), 'aumid'), null);
+    eq('空标题返回 null', buildExternalMediaPseudoSong(input({ title: null }), 'aumid'), null);
 }
 
 console.log('\n零回归：不传 effective 时模型逐字段等价');

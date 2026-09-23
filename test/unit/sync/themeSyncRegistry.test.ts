@@ -60,7 +60,8 @@ describe('themeSyncRegistry migration', () => {
 
         expect(upsertEntriesMock).toHaveBeenCalledWith([legacyRecord]);
         expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
-    });
+        // 全量并行下 fake-IndexedDB 迁移会被 CPU 争抢拖过默认 5s 墙钟上限；判据不变，只放宽计时。
+    }, 15000);
 
     it('does not overwrite a newer IndexedDB record during a retried migration', async () => {
         const newerRecord = { ...legacyRecord, updatedAt: '2026-07-02T00:00:00.000Z', source: 'edited' as const };
@@ -75,7 +76,7 @@ describe('themeSyncRegistry migration', () => {
 
         expect(upsertEntriesMock).toHaveBeenCalledWith([]);
         expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
-    });
+    }, 15000);
 
     it('keeps legacy localStorage data when the IndexedDB write fails', async () => {
         const raw = JSON.stringify({ [legacyRecord.fingerprint]: legacyRecord });

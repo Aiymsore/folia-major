@@ -1,6 +1,6 @@
 # Automix 内存优化 — 诊断与方案
 
-> 状态（2026-08-23）：诊断完成、方案定型、Phase 0＋1①＋**1③④** 已完成。**app 本体已改**：htdemucs 推理从 onnxruntime-node 搬到 Python sidecar（新增 `htdemucs_runner.py`/`sidecar.cjs`，改 `worker.cjs`/`modelPaths.cjs`/`package.json`），sidecar 输出与 runner 逐比特一致、缺件干净回退、27 单测全绿。**待做**：Phase 1②（运行时做成可下载件，代码可写＋单测；端到端测试等运行时 zip 上传到镜像）、Phase 2（app 内实测峰值＜1GB、健壮性、各态）。交付（PR）仅凭用户明确下令，绝不自行发起。
+> 状态（2026-08-23 诊断，2026-09-23 更新）：诊断完成、方案定型、Phase 0＋1①③④ 已完成。**app 本体已改**：htdemucs 推理从 onnxruntime-node 搬到 Python sidecar（新增 `htdemucs_runner.py`/`sidecar.cjs`，改 `worker.cjs`/`modelPaths.cjs`/`package.json`），sidecar 输出与 runner 逐比特一致、缺件干净回退、27 单测全绿。**Phase 1② 代码半已完成并核对**（manifest `runtime` 条目＋三平台 zip 哈希、`modelStore` 解压、UI 第三行、`modelsPresent` 的 htdemucs＝onnx＋运行时门、相关单测，另补 `test/unit/electron/sidecar.test.ts` 覆盖 Phase 2② 的崩溃/超时/释放）。**挂账 8 代码半已完成**（beat_this CPU 开关＋1.95s 段长候选，见 §9）。**待做**：① 运行时 zip 上传三镜像＋端到端下载测试（用户的托管动作，清单见 §7 Phase 1②(b)）；② Phase 2 实机复测（清单见 §7 Phase 2，跑在用户机器）＋ 8a/8b 盲听；③ Phase 3 清理诊断工装。交付（PR）仅凭用户明确下令，绝不自行发起。
 > 首选＝关掉 ORT 内存复用（`enable_mem_reuse=0`）→ 走 Python 旁挂进程 → 做成按需下载。
 > 节奏：全做完 → 测试 → 确认稳定 → 再 PR。不赶。
 
@@ -110,9 +110,20 @@
 - **Phase 0　证据　✅已完成**：Python 实测线上模型 reuse=0 → 790MB ＋ 输出逐比特一致（见 §4）。
 - **Phase 1①　运行时包 ＋ runner　✅已完成**：把 uv 的 python-build-standalone（可整体搬走的独立 Python，非 embeddable）裁掉 tcl/tk/test/pip，塞 onnxruntime＋numpy，得**自足 sidecar 文件夹 137MB（裁后）/ 压缩下载 ~60MB**（对照：htdemucs 模型本身 158MB，同量级）。裸解释器（脱 venv、脱系统 Python）加载 onnxruntime 无碍。`htdemucs_runner.py` 把 worker.cjs 的切段/三角窗 overlap-add/归一逐行搬进 numpy，整段推理全落 Python 进程，Electron 侧完全不碰 ORT。**整窗峰值实测（同一会话，8/15/25/40s＝2/3/5/7 段）：933 / 944 / 962 / 986 MB**——[Phase 2① 悬案关闭]。**峰值近乎持平 ~960±30 MB、由「单段激活＋常驻权重」主宰、与窗口大小基本无关**；单段 795MB 只在窗口<7.8s（1 段）成立，真实歌曲窗口永远≥2 段 → 实际运行峰值就是 ~933–986MB，全程贴 1GB 线下方（余量仅 30–90MB）。地板＝权重驻留 ~450＋单段激活 ~450-500＋累加器 ~30-55MB。**没有便宜的余量杠杆**：实测「每段开新会话」更差（1288MB / 49s，重载权重 7 次、新旧会话瞬时叠加），持久会话既最省内存又最快。想再降只能走 §9 重导出缩段（质量风险、需盲听、已挂账）。
 - **Phase 1③　worker 改 spawn sidecar　✅已完成**：htdemucs 整段推理搬出 onnxruntime-node，改由下载的 Python 运行时跑。落地文件：`electron/analysis/htdemucs_runner.py`（生产版，随 app 走、`asarUnpack` 解包，外部 python.exe 才读得到）、`electron/analysis/sidecar.cjs`（写临时文件→spawn→读回→切三轨的纯 Node 管道，含 120s 超时与 .part 原子落盘）、`modelPaths.cjs` 加 `resolveRuntime/runtimePresent`、`worker.cjs` 的 `runHtdemucs` 改为「查运行时＋权重都在→交 sidecar；缺任一→decline 回退」，并删掉已搬进 Python 的 JS 切段/三角窗/归一（PROVIDERS/IDLE_RELEASE 里的 htdemucs 死项一并清）。**worker 队列不变→永远只有一个 sidecar 存活→峰值保持单进程量级**；sidecar 退出即把内存全数还回（原来 30s idle-release 的活现在由「进程退出」干）。**验证**：① 30s 真实多段输入过 `sidecar.separate` 与 runner 直跑文件**逐比特一致**（顺序 drums/bass/vocals、长度、字节全对，maxdiff=0）；② `resolveRuntime` 有/无运行时分别正确解析/回 null（＝当前「有 htdemucs.onnx 无运行时」态干净回退）；③ 三个 .cjs `node --check` 过、27 个模型单测全绿。契约：flat float32 `[left,right]` 进 → `[drums.L/R,bass.L/R,vocals.L/R]` 出、总长走 argv。
-- **Phase 1②　运行时做成可下载件　待做**：分两半——**(a) 代码**：manifest 加运行时条目（zip＋sha256，落地后解压到 `models/runtime/`）、modelStore 复用 `downloadTo`＋加解压、AutomixModelsSection 加第三行、`modelCanRun('htdemucs')` 改为「onnx＋运行时都在」；可独立写＋单测。**(b) 托管**：把裁剪版运行时打成 zip、算 hash、传到 hf-mirror/hf/github 三镜像（与现有模型同套，属你的 `folia-models` 仓库），端到端下载测试等这步。zip 由我们打好交付，上传是你的动作。
+- **Phase 1②　运行时做成可下载件　(a) 代码半 ✅已完成（2026-09-23 核对）**：manifest `runtime` 条目（`unpack: "runtime"`＋`platforms` 三平台 zip 的 bytes/sha256）、`modelStore.cjs` 下载→sha256 校验→解压 `<models>/runtime/`（.part 原子落盘、防 zip-slip、解包后清 zip）、`modelPaths.cjs` 的 `resolveRuntime/runtimePresent` 与「htdemucs＝onnx＋运行时都在」门、`AutomixModelsSection` 第三行（`options.modelEnablesRuntime`，三语言）、`build/buildPythonRuntime.mjs` 打包工装、`modelPaths/modelStore` 单测。**(b) 托管 ✅zip 已打好（哈希在 manifest）/ ⏳待上传**：把三个 zip 传到 hf-mirror → hf → github（`folia-models` 仓库）＋两个网盘兜底，然后端到端下载测试。上传清单：
+  | 文件 | bytes | sha256 |
+  | --- | --- | --- |
+  | `folia-runtime-win32-x64.zip` | 35633855 | `50a5829ac928071ab2eecaf2667e5dab9c3af2b4b44fb5bb4b7acfb9863cdacd` |
+  | `folia-runtime-darwin-arm64.zip` | 44380755 | `f8313150254d699396b4ff4c9289bdd2864ba3268bd137e5aeb17963be318cde` |
+  | `folia-runtime-linux-x64.zip` | 60509680 | `cf1347f5621fed74f8b2dea243ea1365824ac77ab52ddc2183ca8a77180b60da` |
 - **Phase 1④　beat_this 不动　✅已确认**：改动只碰 htdemucs 路径；beat_this 仍在 worker 内走 WebGPU，PROVIDERS 里只剩它一项，代码与调度未变。
-- **Phase 2　测试＋稳定**：① 整窗峰值 <1GB **✅已在独立脚本验（40s 满窗 986MB）**，Phase 2 复测＝在 app 内接线后复现；② sidecar 崩溃/超时/被重启/用完释放；③ 各态（弱机/无运行时/下载失败/网盘兜底）；④ beat 不迟到、换歌不掉帧。
+- **Phase 2　测试＋稳定**：① 整窗峰值 <1GB **✅已在独立脚本验（40s 满窗 986MB）**，Phase 2 复测＝在 app 内接线后复现（实机）；② sidecar 崩溃/超时/被重启/用完释放 **✅单测覆盖（`test/unit/electron/sidecar.test.ts`：runner 崩溃报因、超时杀进程不留孤儿、输出契约不符拒收、成败都释放临时目录）**；③ 各态（弱机/无运行时/下载失败/网盘兜底）与 ④ beat 不迟到、换歌不掉帧（实机）。**实机复测清单**（跑在用户机器，用 §10 的 diag 工装读峰值）：
+  1. 峰值：播一首窗长 ≥40s 的歌触发分离，worker 进程整窗峰值 <1GB（对照独立脚本 986MB）。
+  2. 无运行时态：删 `<models>/runtime/` → 表现模式退普通交叉淡入、设置页回「未安装」，无报错弹窗。
+  3. 下载各态：断网点下载 → 失败提示＋网盘兜底入口出现；下载中取消/失败后重试 → 无残留 `.part`/`runtime.part`。
+  4. 网盘手动路线：网盘 zip 放进扫描 → 校验通过即装、被截断的拒收。
+  5. 健壮性：分离中切歌/切文件夹（host 重启 worker）→ 当次退交叉淡入，下一首恢复正常。
+  6. 不掉链子：beat grid 在换歌 deadline 前出结果；分离期间切歌无掉帧。
 - **Phase 3　清理**：删诊断工装；整理 worker/manifest/UI 改动到「可交付」状态。
 - **交付（PR）＝仅凭用户明确下令**：全做完、测好、确认稳定后**停在此处等命令**；PR/推送到上游 `chthollyphile/folia-major` 由用户拍板才执行，绝不由计划自动触发、绝不自行发起。审计整条分支范围后再推（见记忆 no-claude-attribution）。
 - **分叉**：Phase 2 整窗仍破 1GB 或 sidecar 稳不住 → 退 OpenVINO；重导出仅全不行才回。
@@ -128,8 +139,8 @@
 内存优化是**一叠可叠加措施**，mem_reuse 只是先落地的一块。以下挂账、不动，现件稳定后再逐个评估（也待用户补充）：
 
 - **fp16weights 模型**：不降运行时内存，但**下载体积砍半**（~158→~80MB）——接"下载要小"。是量化，质量需盲听。
-- **重导出缩短/动态段长**：叠在 790MB 上再往下压（破 1GB 后非必需，对更弱机有意义）。质量风险，需盲听。
-- **beat_this 切 CPU 开关**：给"打游戏要零显卡占用"的用户。
+- **重导出缩短/动态段长**：叠在 790MB 上再往下压（破 1GB 后非必需，对更弱机有意义）。质量风险，需盲听。**挂账 8b 已交付第二刀候选**（`models/htdemucs-1.95s.candidate.onnx`，1.95s 段；单段对拍 CPU 峰值 2152→1129MB、单次 1.05→0.43s，数据与复现步骤见 `src/services/automix/MODELS.md` §6 第 5 条），采用与否待盲听拍板。
+- **beat_this 切 CPU 开关**：给"打游戏要零显卡占用"的用户。✅ 代码已落地（2026-09-23，挂账 8a），复测＋盲听待做。
 - **线程数 / idle 释放 / 图优化级别调参**：小项，收益待量。
 
 > 纪律：每项各自过 §6 红线 ＋ diag 复测；**一次只加一项、单独量增益**，避免说不清谁起作用。

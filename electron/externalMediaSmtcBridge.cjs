@@ -1,4 +1,4 @@
-// electron/appleMusicSmtcBridge.cjs
+// electron/externalMediaSmtcBridge.cjs
 // Apple Music SMTC bridge: supervises the folia-apple-music-smtc-helper.exe child process and turns
 // its JSONL stdout into a status object the main process can serve over IPC.
 //
@@ -114,7 +114,7 @@ function commandFailure(command, errorKind, error) {
 
 // Empty status: the shape every consumer sees before the helper has said anything, and the shape
 // the renderer clears itself to when the bridge is unavailable.
-function emptyAppleMusicSmtcStatus() {
+function emptyExternalMediaStatus() {
   return {
     bridgeAvailable: false,
     helperState: 'stopped',
@@ -128,6 +128,7 @@ function emptyAppleMusicSmtcStatus() {
     durationMs: null,
     hasThumbnail: false,
     updatedAt: null,
+    lastUpdatedAt: null,
     lastEventAt: null,
     sessionCount: null,
     lastCommand: null,
@@ -135,7 +136,7 @@ function emptyAppleMusicSmtcStatus() {
   };
 }
 
-function createAppleMusicSmtcBridge(options = {}) {
+function createExternalMediaSmtcBridge(options = {}) {
   const {
     spawnFn = require('child_process').spawn,
     logWarn = console.warn.bind(console),
@@ -148,12 +149,30 @@ function createAppleMusicSmtcBridge(options = {}) {
     respawnDelayMs = RESPAWN_DELAY_MS,
     stopGraceMs = STOP_GRACE_MS,
     commandTimeoutMs = COMMAND_TIMEOUT_MS,
+    /**
+     * AUMID substring the helper should match, passed through as `--match <value>`.
+     *
+     * The observation layer targets the **Chrome** session — the controller is a Chrome extension
+     * driving music.apple.com, and an observer that watched a different media source than the
+     * controller addresses would report a track nobody is hearing. `observer` and `controller` must
+     * name the same source; see docs/external-media-backend.md ("拓扑").
+     *
+     * The helper's own default is `Chrome` for the same reason. A function is accepted so the value
+     * can be resolved lazily and changed between restarts; returning null/'' omits the flag entirely
+     * and keeps that default.
+     *
+     * NOTE: substring matching means a Chrome-scoped helper also sees non-Apple media in Chrome
+     * (YouTube, etc). SMTC does not expose a URL, so this cannot be filtered at the helper. The
+     * reconciliation layer (`utils/externalMediaQueueReconcile.ts`) is what decides whether an
+     * observation belongs to Folia's queue; until it says so, an observation is not trusted.
+     */
+    matchSubstring = null,
     onStatusChanged = () => {},
   } = options;
 
   let child = null;
   let helperState = 'stopped'; // stopped | starting | running | missing
-  let status = emptyAppleMusicSmtcStatus();
+  let status = emptyExternalMediaStatus();
   let lastProcessedEventAt = 0;
   let stdoutBuffer = '';
   let watchdogTimer = null;
@@ -195,7 +214,7 @@ function createAppleMusicSmtcBridge(options = {}) {
     const pending = pendingCommands.get(id);
     if (!pending) {
       // Late (already timed out) or unknown id. Logged, not surfaced: there is no caller left.
-      logWarn('[AppleMusicSmtc] response for unknown command id', id);
+      logWarn('[ExternalMediaSmtc] response for unknown command id', id);
       return;
     }
     pendingCommands.delete(id);
@@ -230,6 +249,7 @@ function createAppleMusicSmtcBridge(options = {}) {
       durationMs: Number.isFinite(event.durationMs) ? event.durationMs : null,
       hasThumbnail: event.hasThumbnail === true,
       updatedAt: Number.isFinite(event.updatedAtMs) ? event.updatedAtMs : null,
+      lastUpdatedAt: Number.isFinite(event.lastUpdatedMs) ? event.lastUpdatedMs : null,
       lastEventAt: lastProcessedEventAt,
       lastError: null,
     });
@@ -249,6 +269,7 @@ function createAppleMusicSmtcBridge(options = {}) {
       durationMs: null,
       hasThumbnail: false,
       updatedAt: null,
+      lastUpdatedAt: null,
       lastEventAt: lastProcessedEventAt,
     });
   }
@@ -297,7 +318,7 @@ function createAppleMusicSmtcBridge(options = {}) {
         });
         return;
       default:
-        logWarn('[AppleMusicSmtc] unknown helper event', event.event);
+        logWarn('[ExternalMediaSmtc] unknown helper event', event.event);
     }
   }
 
@@ -327,7 +348,7 @@ function createAppleMusicSmtcBridge(options = {}) {
       watchdogTimer = null;
       // The helper is alive but silent past its heartbeat window. Kill and let the respawn path
       // restart it rather than reporting stale data forever.
-      logWarn('[AppleMusicSmtc] helper went silent; restarting');
+      logWarn('[ExternalMediaSmtc] helper went silent; restarting');
       killHelper();
       scheduleRespawn();
     }, heartbeatTimeoutMs);
@@ -450,11 +471,17 @@ function createAppleMusicSmtcBridge(options = {}) {
 
     let spawned;
     try {
-      spawned = spawnFn(resolved, ['watch'], { stdio: ['pipe', 'pipe', 'pipe'] });
+      // `--match` is appended only when configured, so the un-retargeted case spawns the helper with
+      // exactly the argument list it has always had.
+      const matchValue = typeof matchSubstring === 'function' ? matchSubstring() : matchSubstring;
+      const helperArgs = typeof matchValue === 'string' && matchValue.trim()
+        ? ['watch', '--match', matchValue.trim()]
+        : ['watch'];
+      spawned = spawnFn(resolved, helperArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (error) {
       // spawn throws synchronously on invalid arguments; without this the bridge would latch on a
       // child that never existed and never retry.
-      logError('[AppleMusicSmtc] helper spawn threw', error);
+      logError('[ExternalMediaSmtc] helper spawn threw', error);
       helperState = 'stopped';
       publish({ lastError: { message: String(error?.message || error), kind: 'spawn-failed' } });
       scheduleRespawn();
@@ -476,14 +503,14 @@ function createAppleMusicSmtcBridge(options = {}) {
     spawned.stderr?.on('data', (chunk) => {
       const text = String(chunk).trim();
       if (text) {
-        logWarn('[AppleMusicSmtc] helper stderr', text);
+        logWarn('[ExternalMediaSmtc] helper stderr', text);
       }
     });
     spawned.on?.('error', (error) => {
       if (thisGeneration !== generation) {
         return;
       }
-      logError('[AppleMusicSmtc] helper process error', error);
+      logError('[ExternalMediaSmtc] helper process error', error);
       publish({ lastError: { message: String(error?.message || error), kind: 'process-error' } });
     });
     spawned.on?.('exit', (code, signal) => {
@@ -539,7 +566,7 @@ function createAppleMusicSmtcBridge(options = {}) {
     consumeStdout,
     parseHelperEventLine,
     getStatus,
-    createStatus: emptyAppleMusicSmtcStatus,
+    createStatus: emptyExternalMediaStatus,
   };
 }
 
@@ -554,6 +581,6 @@ module.exports = {
   ERR_KIND_TIMEOUT,
   parseHelperEventLine,
   validateCommandRequest,
-  emptyAppleMusicSmtcStatus,
-  createAppleMusicSmtcBridge,
+  emptyExternalMediaStatus,
+  createExternalMediaSmtcBridge,
 };

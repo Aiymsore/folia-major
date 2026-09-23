@@ -959,6 +959,9 @@ const getKugouHistoryName = async (date: string): Promise<string> => {
     return kugouHistoryNameByDate.get(date) || date;
 };
 
+// 刻意不实现的 optional 接口（2026-09-23 用户定案，背景见 docs/kugou-omni-capability-alignment.md）：
+// `getSongPageUrl`（接口文档没有稳定的歌曲详情页 URL 约定）与 `playback.getAvailability` /
+// `playback.getReplacement`（没有可用性/版权替代端点）。要恢复就补这三个接口位，消费方已有兜底。
 export const kugouProvider: OnlineMusicProvider = {
     id: 'kugou',
     displayName: 'KuGou Music',

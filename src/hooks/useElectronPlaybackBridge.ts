@@ -25,7 +25,8 @@ import { getPlaybackSourceRef } from '../utils/appPlaybackGuards';
 import { omni } from '../services/onlineMusic/omni';
 import { subscribeToTransitionCue } from '../services/automix/transitionCue';
 import { useStableActionSurface } from './useStableCallbacks';
-import { selectDisplayCoverUrl, selectDisplayDuration, selectDisplayLyrics, selectDisplayPlayerState, selectDisplaySong, usePlaybackStore } from '../stores/usePlaybackStore';
+import { selectDisplayCoverUrl, selectDisplayDuration, selectDisplayPlayerState, selectDisplaySong, usePlaybackStore } from '../stores/usePlaybackStore';
+import { useDisplayLyrics } from './useDisplayLyrics';
 import { useAppChromeStore } from '../stores/useAppChromeStore';
 import { useThemeSettingsStore } from '../stores/useThemeSettingsStore';
 import { usePlayerChromeSettingsStore } from '../stores/usePlayerChromeSettingsStore';
@@ -138,7 +139,9 @@ export const useElectronPlaybackBridge = ({
     // The raw transport reads IDLE for the length of a blend's lead, which drew a stopped player
     // on the remote over a track the listener could still hear, offering a play button.
     const currentSong = usePlaybackStore(selectDisplaySong);
-    const lyrics = usePlaybackStore(selectDisplayLyrics);
+    // 统一歌词入口：远程窗口 / taskbar 发布会带上歌词，Apple Music 后端下必须是它自己的那一份，
+    // 而不是上一首 Folia 曲目的行。
+    const lyrics = useDisplayLyrics();
     const coverUrl = usePlaybackStore(selectDisplayCoverUrl);
     const duration = usePlaybackStore(selectDisplayDuration);
     const playerState = usePlaybackStore(selectDisplayPlayerState);

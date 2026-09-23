@@ -39,8 +39,10 @@ const TIMEOUT_MS = 120_000;
  * Separate from `separate` for the two things easy to get wrong once they are tangled with the temp
  * files below: that stdout is a diagnostic channel rather than data, and that a successful run still
  * has to say what it cost - logging only failures is what let a 4GB spike run unmeasured for a day.
+ *
+ * `timeoutMs` is injectable so the timeout/kill path is testable without waiting out the real line.
  */
-const runRunner = (pythonExe, args) => new Promise((resolve, reject) => {
+const runRunner = (pythonExe, args, timeoutMs = TIMEOUT_MS) => new Promise((resolve, reject) => {
     const child = spawn(pythonExe, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stderr.on('data', (chunk) => { output += String(chunk); });
@@ -48,8 +50,8 @@ const runRunner = (pythonExe, args) => new Promise((resolve, reject) => {
 
     const timer = setTimeout(() => {
         child.kill();
-        reject(new Error(`htdemucs runner timed out after ${TIMEOUT_MS / 1000}s`));
-    }, TIMEOUT_MS);
+        reject(new Error(`htdemucs runner timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
     timer.unref?.();
 
     child.on('error', (error) => { clearTimeout(timer); reject(error); });
@@ -81,8 +83,9 @@ const floatsFrom = (buf) => {
  * @param script    absolute path to htdemucs_runner.py (ships with the app)
  * @param modelPath absolute path to htdemucs.onnx
  * @param left,right equal-length Float32Array, the raw stereo mix at 44100
+ * @param timeoutMs optional run deadline (defaults to TIMEOUT_MS; tests shorten it)
  */
-const separate = async ({ pythonExe, script, modelPath, left, right }) => {
+const separate = async ({ pythonExe, script, modelPath, left, right, timeoutMs = TIMEOUT_MS }) => {
     const total = left.length;
     // A per-call 0700 directory rather than two predictable names in the shared temp root. os.tmpdir()
     // is multi-user on Linux/macOS, and a name built only from pid+time+counter lets another local user
@@ -99,7 +102,7 @@ const separate = async ({ pythonExe, script, modelPath, left, right }) => {
         Buffer.from(right.buffer, right.byteOffset, total * 4).copy(inBuf, total * 4);
         await fsp.writeFile(inPath, inBuf);
 
-        await runRunner(pythonExe, [script, inPath, outPath, String(total), modelPath]);
+        await runRunner(pythonExe, [script, inPath, outPath, String(total), modelPath], timeoutMs);
 
         const floats = floatsFrom(await fsp.readFile(outPath));
         if (floats.length !== RETURNED.length * 2 * total) {

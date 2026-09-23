@@ -77,7 +77,8 @@ describe('lyrics architecture', () => {
         }
 
         expect(offenders).toEqual([]);
-    });
+        // 全量并行下逐文件读源码树会被 CPU 争抢拖过默认 5s 墙钟上限；判据不变，只放宽计时。
+    }, 20000);
 
     it('keeps worker and compatibility wrappers wired to parserCore', async () => {
         const workerContent = await readRepoFile('src/workers/lyricsParser.worker.ts');

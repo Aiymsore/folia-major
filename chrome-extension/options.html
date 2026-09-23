@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Folia Companion — Options</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1d1d1f;
+        --muted: #6e6e73;
+        --bg: #ffffff;
+        --card: #f5f5f7;
+        --accent: #fa2d48;
+        --ok: #1d8a4c;
+        --warn: #b25000;
+        --err: #c1121f;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #f5f5f7;
+          --muted: #a1a1a6;
+          --bg: #1c1c1e;
+          --card: #2c2c2e;
+          --ok: #4cd07d;
+          --warn: #ffb340;
+          --err: #ff6961;
+        }
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+        max-width: 640px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 14px;
+        margin: 24px 0 8px;
+      }
+      p.sub {
+        margin: 0 0 20px;
+        color: var(--muted);
+      }
+      .card {
+        background: var(--card);
+        border-radius: 10px;
+        padding: 16px;
+      }
+      label {
+        display: block;
+        margin-bottom: 12px;
+      }
+      label span {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px 10px;
+        border: 1px solid rgba(128, 128, 128, 0.4);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-top: 4px;
+      }
+      button {
+        padding: 8px 14px;
+        border: 0;
+        border-radius: 6px;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: transparent;
+        color: var(--fg);
+        border: 1px solid rgba(128, 128, 128, 0.4);
+      }
+      #status {
+        margin-top: 12px;
+        font-weight: 600;
+      }
+      .ok {
+        color: var(--ok);
+      }
+      .warn {
+        color: var(--warn);
+      }
+      .err {
+        color: var(--err);
+      }
+      ul {
+        margin: 8px 0 0;
+        padding-left: 20px;
+        color: var(--muted);
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+      }
+      .note {
+        color: var(--muted);
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Folia Companion</h1>
+    <p class="sub">
+      Connects this Chrome profile to the Folia desktop app so Folia can control the Apple Music
+      <strong>web</strong> player at music.apple.com.
+    </p>
+
+    <div class="card">
+      <label>
+        <span>Bridge address or port (Folia → Settings → External media)</span>
+        <input
+          id="port"
+          type="text"
+          inputmode="numeric"
+          placeholder="32110"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </label>
+      <label>
+        <span>Bridge token</span>
+        <input id="token" type="text" placeholder="paste the token from Folia" autocomplete="off" spellcheck="false" />
+      </label>
+      <div class="row">
+        <button id="save" type="button">Save</button>
+        <button id="test" class="secondary" type="button">Test connection</button>
+      </div>
+      <div id="status">Not configured.</div>
+      <p class="note" id="portHint">
+        Paste either the number (<code>32110</code>) or the whole address Folia shows
+        (<code>ws://127.0.0.1:32110</code>) — both work.
+      </p>
+    </div>
+
+    <h2>Prerequisites</h2>
+    <ul>
+      <li>Folia is running with external media control enabled (that is what opens the port).</li>
+      <li>A <code>music.apple.com</code> tab is open in this Chrome profile.</li>
+      <li>You are signed in to Apple Music there, with an active subscription.</li>
+      <li>
+        The page storefront matches your account storefront (for example, a <code>/cn/</code> page with
+        a <code>cn</code> account). A mismatch silently forces the web player into preview-only mode.
+      </li>
+    </ul>
+
+    <h2>What this extension does and does not do</h2>
+    <p class="note">
+      It calls the music.apple.com page's own MusicKit playback methods and reads the page's own
+      player state. It does not touch DRM: no key-system access, no license data, no decryption, no
+      stream capture or proxying. Playback only works when the page itself can play it.
+    </p>
+
+    <script src="bridge-input.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

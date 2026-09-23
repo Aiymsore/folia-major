@@ -60,7 +60,9 @@ DFT 算子，节点数从 **24917 降到 1556**。
 
 ### 2.3 ④ 段长砍半 —— 本仓库所做
 
-脚本 `build/htdemucs_halve_segment.py`（143 行，**全程不涉及 PyTorch，无需重新导出**）。
+脚本 `build/htdemucs_halve_segment.py`（**全程不涉及 PyTorch，无需重新导出**）：按图内声明的
+段长自动识别刀次——对 7.8s 图切出 3.9s（下述），对 3.9s 图可再切出 1.95s 候选（§6 第 5 条）。
+两刀都是显式字面映射表而非运行时推算；输出逐次运行字节一致。
 
 **为何选段长。** htdemucs 不是整首一次推理，而是切成固定长度的段逐段处理，段间 25% 重叠、
 三角窗 overlap-add 拼回。因此**内存峰值 = 单段激活值**，与窗口长度无关（实测 8/15/25/40 s
@@ -178,14 +180,25 @@ setter；自编 C++ 二进制会撞同一堵墙。因此 app 额外下载一个�
 3. 重新上传到三条镜像（hf-mirror → hf → github，外加两个网盘兜底）。
 4. 代码侧通常无需改动：段长经 `segment_of()` 自动跟随。若改动采样率或轨序，则属契约变更，
    须同步 `htdemucs_runner.py` 顶部的契约注释与 `SOURCES`/`RETURNED`。
+5. **再切第二刀（挂账 8b，候选状态）**：
+   `python build/htdemucs_halve_segment.py models/htdemucs.onnx models/htdemucs-1.95s.candidate.onnx`
+   （`172032→86016`，1.950s；输出 97,978,156 B，sha256 `427b9588287d85d78f212d9f6f4acbc42b626e28ef9d2d948fed78311f4aec20`，
+   重跑手术字节一致）。
+   对拍工具 `python test/manual/htdemucs_segment_bench.py <model>`（单段、每 8ms 采 RSS 峰值，
+   同 §2 的采样盲区）。2026-09-23 本机 CPU provider 对拍：单段峰值 **2152→1129 MB**，
+   单次 **1.05→0.43 s**。
+   **盲听通过前不动 manifest、不替换 `models/htdemucs.onnx`**；采用后按上面 2-4 步走，
+   并按 §7 纪律单独复测（一次只加一项）。
 
 ---
 
 ## 7. 还没做的（挂账）
 
-- **beat_this 切 CPU 开关**——面向「打游戏要求零显卡占用」的用户。当前占 ~580MB 显存 / 22%
-  利用率 / 亚秒延迟，对游戏近乎无感，故非必需。
+- **beat_this 切 CPU 开关**——✅ 代码已落地（2026-09-23，挂账 8a）：设置项＋命令面板
+  `transition-beat-cpu-toggle`（三语言），复用 `FOLIA_ANALYSIS_FORCE_CPU` 管道，
+  切换即重启 worker 生效。**复测＋盲听待做**（CPU 推理数值与 WebGPU 不同）。
 - **再缩一档段长**——3.9s 已低于 500MB，再缩收益递减且上下文继续变短，需新一轮盲听方可确定。
+  （候选产物＋对拍数据在挂账 8b 交付，是否采用待盲听拍板。）
 - **int8 权重**——已排除。仅省权重体积、不减激活；上游自述 fp16 权重运行时内存不变，可作佐证。
 
 > 纪律：每项单独复测内存 + 盲听，**一次只加一项、单独衡量增益**，否则无法归因。

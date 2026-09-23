@@ -20,8 +20,10 @@ const { DEFAULT_DISCORD_APPLICATION_ID, createDiscordPresenceController } = requ
 const { createVoiceInputPauseMonitor } = require('./voiceInputPause.cjs');
 const { createDisplaySleepBlocker } = require('./displaySleepBlocker.cjs');
 const { createLyricApi } = require('./lyricApi.cjs');
-const appleMusicSmtcModule = require('./appleMusicSmtcBridge.cjs');
-const appleMusicSmtcHelperPathModule = require('./appleMusicSmtcHelperPath.cjs');
+const externalMediaSmtcModule = require('./externalMediaSmtcBridge.cjs');
+const externalMediaSmtcHelperPathModule = require('./externalMediaSmtcHelperPath.cjs');
+const externalMediaBridgeModule = require('./externalMediaBridge.cjs');
+const { createAppleMusicLibraryBridge, APPLE_MUSIC_PARTITION } = require('./appleMusicLibraryBridge.cjs');
 const { createLocalCoverAssetStore, getLocalCoverAssetDirectory } = require('./localCoverAssets.cjs');
 const {
   compareVersions,
@@ -346,12 +348,12 @@ function resolveWallpaperHelperPath() {
 // than failing anything: Apple Music support is additive and must never block app startup.
 //
 // The priority order itself (override → resources → dev build/) lives in
-// electron/appleMusicSmtcHelperPath.cjs so it can be unit-tested; everything Electron-shaped is
+// electron/externalMediaSmtcHelperPath.cjs so it can be unit-tested; everything Electron-shaped is
 // passed in from here. The dev fallback is what makes the exe that `npm run
 // build:apple-music-smtc-helper` writes to <repo>/build/ findable under `electron .`, where
 // `process.resourcesPath` names Electron's own resources directory rather than the checkout.
-function resolveAppleMusicSmtcHelperPath() {
-  return appleMusicSmtcHelperPathModule.resolveAppleMusicSmtcHelperPath({
+function resolveExternalMediaSmtcHelperPath() {
+  return externalMediaSmtcHelperPathModule.resolveExternalMediaSmtcHelperPath({
     platform: process.platform,
     env: process.env,
     resourcesPath: process.resourcesPath,
@@ -361,24 +363,374 @@ function resolveAppleMusicSmtcHelperPath() {
   });
 }
 
-// Phase 1 Apple Music bridge. Created lazily on first status request so an install that never looks
-// at Apple Music never carries a helper process. Read-only: the helper exposes no transport command.
-let appleMusicSmtcBridge = null;
+/**
+ * AUMID substring the SMTC helper matches.
+ *
+ * This is the retarget that makes the architecture coherent. The observer watches **Chrome** (where
+ * the extension drives music.apple.com), never the desktop Apple Music app: an observer pointed at a
+ * different media source than the controller addresses would report a track nobody is hearing, which
+ * is exactly the incoherence this refactor removes (see docs/external-media-backend.md, "拓扑").
+ *
+ * `Chrome` is a case-insensitive substring, so it covers `Chrome`, `Chrome Beta`, channel-suffixed
+ * AUMIDs and a bare `chrome.exe`. Overridable (FOLIA_EXTERNAL_MEDIA_SMTC_MATCH) so another browser
+ * channel is a setting rather than a code change. Substring matching means this also sees non-Apple
+ * media in Chrome; SMTC exposes no URL, so that cannot be filtered here —
+ * `utils/externalMediaQueueReconcile.ts` is what decides whether an observation belongs to Folia's
+ * queue.
+ */
+const EXTERNAL_MEDIA_SMTC_MATCH = process.env.FOLIA_EXTERNAL_MEDIA_SMTC_MATCH || 'Chrome';
 
-function ensureAppleMusicSmtcBridge() {
-  if (appleMusicSmtcBridge) {
-    return appleMusicSmtcBridge;
+// Apple Music bridge. Created lazily on first status request so an install that never looks
+// at external media never carries a helper process.
+let externalMediaSmtcBridge = null;
+
+function ensureExternalMediaSmtcBridge() {
+  if (externalMediaSmtcBridge) {
+    return externalMediaSmtcBridge;
   }
-  appleMusicSmtcBridge = appleMusicSmtcModule.createAppleMusicSmtcBridge({
-    helperPath: () => resolveAppleMusicSmtcHelperPath(),
-    onStatusChanged: (status) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('apple-music-smtc-status-changed', status);
-      }
+  externalMediaSmtcBridge = externalMediaSmtcModule.createExternalMediaSmtcBridge({
+    helperPath: () => resolveExternalMediaSmtcHelperPath(),
+    matchSubstring: () => EXTERNAL_MEDIA_SMTC_MATCH,
+    onStatusChanged: () => {
+      // Routed through the merged status builder: the renderer consumes ONE status object covering
+      // both the observation and the transport half, so a push from either side refreshes both.
+      broadcastExternalMediaStatus();
     },
   });
-  appleMusicSmtcBridge.start();
-  return appleMusicSmtcBridge;
+  externalMediaSmtcBridge.start();
+  return externalMediaSmtcBridge;
+}
+
+// External media bridge. This is the transport half of the external-media backend: a loopback HTTP +
+// WebSocket server that the Folia Chrome extension connects to, so Folia can ask music.apple.com to
+// play a specific track. Separate from the SMTC bridge above and deliberately so:
+//
+//   * the SMTC bridge is the OBSERVER (what is playing, per the OS)
+//   * this bridge is the CONTROLLER (play this track, per the page)
+//
+// Both name the same media source (`'apple-music-web'`), which is the binding invariant the whole
+// architecture rests on: an observer watching one player while the controller drives another reports
+// a track nobody is hearing. See docs/external-media-backend.md, "拓扑".
+//
+// The token is generated once and persisted, exactly like the Stage API's: the extension is
+// configured with it once and reconnects with it forever after. Loopback-only binding plus a bearer
+// token is the security boundary — any local process can reach 127.0.0.1, so the token is what
+// actually gates control, and the Origin check refuses browser pages that are not extensions.
+const EXTERNAL_MEDIA_TOKEN_SETTING_KEY = 'EXTERNAL_MEDIA_TOKEN';
+const EXTERNAL_MEDIA_ENABLED_SETTING_KEY = 'EXTERNAL_MEDIA_ENABLED';
+
+/**
+ * Whether the external-media backend is switched on. Default OFF: the feature needs four external
+ * prerequisites (Chrome running, extension installed, page signed in, active subscription), so an
+ * install that never opts in must never spawn the helper process or open the loopback bridge.
+ */
+function isExternalMediaEnabled() {
+  return store.get(EXTERNAL_MEDIA_ENABLED_SETTING_KEY) === true;
+}
+
+/** Reads the persisted extension token, generating one on first use. */
+function getExternalMediaToken({ generateIfMissing = false } = {}) {
+  const existing = store.get(EXTERNAL_MEDIA_TOKEN_SETTING_KEY);
+  if (typeof existing === 'string' && existing.trim().length > 0) {
+    return existing;
+  }
+  if (!generateIfMissing) {
+    return null;
+  }
+  const nextToken = crypto.randomBytes(32).toString('base64url');
+  store.set(EXTERNAL_MEDIA_TOKEN_SETTING_KEY, nextToken);
+  console.info('[ExternalMedia] Generated Chrome extension token.');
+  return nextToken;
+}
+
+let externalMediaBridge = null;
+
+function ensureExternalMediaBridge() {
+  if (externalMediaBridge) {
+    return externalMediaBridge;
+  }
+
+  externalMediaBridge = externalMediaBridgeModule.createExternalMediaBridge({
+    port: DEFAULT_EXTERNAL_MEDIA_PORT,
+    token: getExternalMediaToken({ generateIfMissing: true }),
+    logInfo: (...args) => console.info('[ExternalMedia]', ...args),
+    logWarn: (...args) => console.warn('[ExternalMedia]', ...args),
+  });
+
+  // The bridge exposes its subscriptions on the returned API, NOT as factory options — passing
+  // `onObservation` in the options object would be silently ignored and the renderer would never
+  // learn about extension-side changes (connect/disconnect, sign-in, storefront) until an unrelated
+  // SMTC push happened to refresh the status. Every observation also publishes a status, so the one
+  // `onStatusChanged` subscription covers both halves without double-broadcasting.
+  externalMediaBridge.onStatusChanged(() => {
+    // An observation change is also a status change (staleness, last observation), so the renderer
+    // is refreshed through the single status channel rather than a second event stream.
+    broadcastExternalMediaStatus();
+  });
+
+  void externalMediaBridge.start().catch((error) => {
+    // A port collision must not be fatal: the rest of the app works, and the renderer reports the
+    // backend as `unavailable` through the status object.
+    console.warn('[ExternalMedia] Failed to start the extension bridge.', error);
+  });
+
+  return externalMediaBridge;
+}
+
+/**
+ * Tears both bridges down (helper process + loopback server). Used when the feature is switched
+ * off and when the extension token is rotated — both are moments where keeping the old transport
+ * alive would keep reporting state the user just disabled or authenticating with a dead token.
+ */
+function stopExternalMediaBridges() {
+  if (externalMediaSmtcBridge) {
+    externalMediaSmtcBridge.dispose();
+    externalMediaSmtcBridge = null;
+  }
+  if (externalMediaBridge) {
+    void externalMediaBridge.stop().catch(() => { /* nothing left to report to */ });
+    externalMediaBridge = null;
+  }
+}
+
+/** The settings the "Settings → External media" panel edits and displays. */
+function getExternalMediaSettings() {
+  return {
+    enabled: isExternalMediaEnabled(),
+    port: DEFAULT_EXTERNAL_MEDIA_PORT,
+    token: getExternalMediaToken({ generateIfMissing: true }),
+  };
+}
+
+/**
+ * Flips the feature on/off: persists the flag, starts or tears down both bridges, and publishes a
+ * fresh status so every listener sees the new availability without polling.
+ */
+function setExternalMediaEnabled(enabled) {
+  store.set(EXTERNAL_MEDIA_ENABLED_SETTING_KEY, enabled === true);
+  if (enabled === true) {
+    ensureExternalMediaSmtcBridge();
+    ensureExternalMediaBridge();
+  } else {
+    stopExternalMediaBridges();
+  }
+  broadcastExternalMediaStatus();
+  return getExternalMediaSettings();
+}
+
+/**
+ * Rotates the extension token. The old token stops working immediately: the live bridge is
+ * restarted so it serves the new token, which drops the extension's open socket — the user must
+ * paste the new token into the extension (the settings panel shows it).
+ */
+async function regenerateExternalMediaToken() {
+  const nextToken = crypto.randomBytes(32).toString('base64url');
+  store.set(EXTERNAL_MEDIA_TOKEN_SETTING_KEY, nextToken);
+  console.info('[ExternalMedia] Rotated the Chrome extension token.');
+  if (externalMediaBridge) {
+    await externalMediaBridge.stop().catch(() => { /* rotation is the point: drop it anyway */ });
+    externalMediaBridge = null;
+    if (isExternalMediaEnabled()) {
+      ensureExternalMediaBridge();
+    }
+  }
+  broadcastExternalMediaStatus();
+  return getExternalMediaSettings();
+}
+
+/**
+ * The single status object the renderer consumes.
+ *
+ * It merges two independent liveness facts, and they must not be collapsed:
+ *   * the SMTC observer (helper healthy, a Chrome media session visible, the track it reports)
+ *   * the extension transport (socket open, version, capabilities, page-level sign-in/storefront)
+ *
+ * `signedIn` / `storefrontMatches` are derived from the bridge's `lastError.kind`, which is how the
+ * content script reports those passive page states (the observation shape has no error slot).
+ *
+ * They stay `null` when unknown rather than defaulting to `false`, because "unknown" and "false"
+ * drive different user actions — reporting `false` would send the user to a login page they may
+ * already be signed in on. Only an explicit report from the page moves them off `null`.
+ */
+function buildExternalMediaStatus() {
+  // The gate is here, at the single status entry point: while the feature is off, neither the
+  // helper process nor the loopback server is created — a status read must not spawn them.
+  if (!isExternalMediaEnabled()) {
+    return {
+      ...externalMediaSmtcModule.emptyExternalMediaStatus(),
+      extensionConnected: false,
+      extensionVersion: null,
+      extensionCapabilities: [],
+      pageReady: null,
+      signedIn: null,
+      storefrontMatches: null,
+      enabled: false,
+    };
+  }
+  const smtc = ensureExternalMediaSmtcBridge().getStatus();
+  const bridge = ensureExternalMediaBridge();
+  const bridgeStatus = bridge.getStatus();
+  const reportedKind = bridgeStatus.lastError?.kind ?? null;
+
+  // The extension's own reading of the page, when it is fresh and it actually has a track.
+  //
+  // WHY IT TAKES PRIORITY OVER SMTC for the playback facts: the SMTC position FROZEN is a real,
+  // measured failure mode, not a theoretical one. Sampled against a live Chrome session, the helper
+  // reported `positionMs: 850` with an anchor age climbing 71s -> 89s: Windows stopped republishing
+  // the timeline, and nothing in the SMTC payload says so. Every consumer that trusts it then sees a
+  // track stuck at 850ms of 292000, so the end-of-track test never fires and the queue stops
+  // advancing. The extension reads the page's own MusicKit object, which keeps ticking.
+  //
+  // SMTC stays the fallback for the cases it is genuinely better at: no extension connected, a page
+  // that cannot be read (`player-declined`), or a stale observation. It is also still the only source
+  // that can see a Chrome session Folia did not start.
+  const extensionObservation = bridgeStatus.lastObservation && !bridgeStatus.isObservationStale
+    ? bridgeStatus.lastObservation
+    : null;
+  const extensionHasTrack = Boolean(extensionObservation?.connected && extensionObservation.identity?.title);
+
+  return {
+    ...smtc,
+    ...(extensionHasTrack ? {
+      // Identity and playback facts from the page. `positionMs` is already milliseconds by the time
+      // it reaches here (see chrome-extension/musickit-time.js).
+      title: extensionObservation.identity.title,
+      artist: extensionObservation.identity.artist || null,
+      album: extensionObservation.identity.album ?? null,
+      durationMs: extensionObservation.identity.durationMs ?? null,
+      positionMs: extensionObservation.positionMs ?? null,
+      playbackStatus: extensionObservation.playbackStatus ?? null,
+      // The extension reads a live value, so the anchor is "now" rather than an OS timestamp of
+      // unknown age. This is what makes the clock's anchor-age correction honest instead of guessed.
+      lastUpdatedAt: extensionObservation.positionEstablishedAtMs ?? null,
+      // A session the page can be read from IS a session, even when Windows never published one.
+      connected: true,
+      sourceAppUserModelId: smtc.sourceAppUserModelId ?? 'Chrome',
+    } : {}),
+    extensionConnected: bridgeStatus.extensionConnected,
+    extensionVersion: bridgeStatus.extensionVersion,
+    extensionCapabilities: bridgeStatus.capabilities,
+    /**
+     * Whether the EXTENSION says the music.apple.com page can be driven.
+     *
+     * A third liveness fact, and deliberately separate from `connected` (which is SMTC's "Windows
+     * sees a Chrome media session"). The two disagree in both directions and the user action differs:
+     * a page whose player is not readable is "reload that tab", while no session at all is "open the
+     * page". Collapsing them once sent a user to open a tab that was already open.
+     *
+     * `null` = the extension has not reported (or its report is stale): unknown, not unmet.
+     */
+    pageReady: extensionObservation ? extensionObservation.connected === true : null,
+    signedIn: reportedKind === 'not-signed-in' ? false : null,
+    storefrontMatches: reportedKind === 'storefront-mismatch' ? false : null,
+    // The bridge being up is enough for the observation half to be usable, so either half being
+    // available keeps the backend selectable — the six-state ladder decides what is missing.
+    bridgeAvailable: smtc.bridgeAvailable || bridgeStatus.available,
+    enabled: true,
+  };
+}
+
+function broadcastExternalMediaStatus() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  mainWindow.webContents.send('external-media-smtc-status-changed', buildExternalMediaStatus());
+}
+
+// Apple Music library/content source. Separate from the SMTC bridge above and deliberately so:
+// SMTC is about *controlling playback of the external app*, this is about *reading library data*.
+// It uses its own persistent session partition, so the sign-in survives restarts and can never
+// collide with Folia's own cookies or proxy state.
+//
+// `getSession` is a thunk because `session.fromPartition` is only valid after the app is ready.
+const appleMusicLibraryBridge = createAppleMusicLibraryBridge({
+  getSession: () => session.fromPartition(APPLE_MUSIC_PARTITION),
+  warn: (...args) => console.warn(...args),
+});
+
+/** The sign-in window, if one is open. At most one at a time — a second click focuses the first. */
+let appleMusicSignInWindow = null;
+
+/**
+ * Opens (or focuses) the Apple Music sign-in window.
+ *
+ * The user's password never touches Folia: this is a plain browser window pointed at Apple's own
+ * login page, and the only thing we read afterwards is the session cookie Apple itself sets. That
+ * is why there is no credential form and no password storage anywhere in this file.
+ */
+function openAppleMusicSignInWindow() {
+  if (appleMusicSignInWindow && !appleMusicSignInWindow.isDestroyed()) {
+    appleMusicSignInWindow.focus();
+    return { ok: true, alreadyOpen: true };
+  }
+
+  appleMusicSignInWindow = new BrowserWindow({
+    width: 1100,
+    height: 860,
+    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+    title: 'Sign in to Apple Music',
+    autoHideMenuBar: true,
+    webPreferences: {
+      partition: APPLE_MUSIC_PARTITION,
+      // Apple's login page is ordinary web content; it gets no preload and no Node.
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+
+  const notifySignedIn = () => {
+    // The cached storefront belongs to the previous account, so drop it on every sign-in.
+    appleMusicLibraryBridge.resetCaches();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('apple-music-library-status-changed');
+    }
+  };
+
+  const sessionInstance = session.fromPartition(APPLE_MUSIC_PARTITION);
+  const onCookieChanged = () => { void checkSignedIn(); };
+  let reportedSignedIn = false;
+  const checkSignedIn = async () => {
+    if (reportedSignedIn) return;
+    const status = await appleMusicLibraryBridge.getStatus();
+    if (!status.signedIn) return;
+    reportedSignedIn = true;
+    notifySignedIn();
+    // Close ourselves once Apple has actually handed over a usable token; leaving the window
+    // open would just be a stray browser window the user has to dismiss.
+    if (appleMusicSignInWindow && !appleMusicSignInWindow.isDestroyed()) {
+      appleMusicSignInWindow.close();
+    }
+  };
+
+  sessionInstance.cookies.on('changed', onCookieChanged);
+  appleMusicSignInWindow.on('closed', () => {
+    sessionInstance.cookies.removeListener('changed', onCookieChanged);
+    appleMusicSignInWindow = null;
+    // A sign-in that completed while the window was closing still needs to reach the renderer.
+    void checkSignedIn();
+  });
+
+  void appleMusicSignInWindow.loadURL('https://music.apple.com/login');
+
+  return { ok: true, alreadyOpen: false };
+}
+
+/** Closes the sign-in window and forgets every Apple Music credential. */
+async function signOutAppleMusic() {
+  if (appleMusicSignInWindow && !appleMusicSignInWindow.isDestroyed()) {
+    appleMusicSignInWindow.close();
+  }
+  appleMusicLibraryBridge.resetCaches();
+  try {
+    const sessionInstance = session.fromPartition(APPLE_MUSIC_PARTITION);
+    await sessionInstance.clearStorageData({ storages: ['cookies'] });
+  } catch (error) {
+    console.warn('[AppleMusicLibrary] failed to clear session cookies:', error);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('apple-music-library-status-changed');
+  }
+  return { ok: true };
 }
 
 function refreshWindowsDesktopWallpaper() {
@@ -1829,6 +2181,7 @@ const MOD_SYSTEM_ENABLED_SETTING_KEY = 'MOD_SYSTEM_ENABLED';
 const DEFAULT_STAGE_API_PORT = 32107;
 const DEFAULT_OBS_BROWSER_SOURCE_PORT = 32108;
 const DEFAULT_LYRIC_API_PORT = 32109;
+const DEFAULT_EXTERNAL_MEDIA_PORT = 32110;
 const FOLIA_RELEASES_URL = 'https://github.com/chthollyphile/folia-major/releases';
 const FOLIA_GITHUB_REPOSITORY = {
   owner: 'chthollyphile',
@@ -5063,9 +5416,9 @@ function createWindow(options = {}) {
 
       // Proves the preload bridge exists in the renderer and reaches the main-process IPC handler.
       // The command API is reported separately because it is the half Phase 2 adds: a missing
-      // appleMusicSendCommand must be visible here rather than as a failing button later.
+      // externalMediaSendCommand must be visible here rather than as a failing button later.
       const shape = await win.webContents.executeJavaScript(
-        'JSON.stringify({ hasGet: typeof window.electron?.appleMusicGetState, hasOn: typeof window.electron?.onAppleMusicStateChanged, hasSend: typeof window.electron?.appleMusicSendCommand })',
+        'JSON.stringify({ hasGet: typeof window.electron?.externalMediaGetState, hasOn: typeof window.electron?.onExternalMediaStateChanged, hasSend: typeof window.electron?.externalMediaSendCommand })',
       );
       log('preload-bridge', JSON.parse(shape));
 
@@ -5073,10 +5426,10 @@ function createWindow(options = {}) {
       // main through a global, so the push path is observable from here.
       await win.webContents.executeJavaScript(`
         (() => {
-          window.__appleMusicSmtcPushes = [];
-          if (typeof window.electron?.onAppleMusicStateChanged === 'function') {
-            window.electron.onAppleMusicStateChanged((status) => {
-              window.__appleMusicSmtcPushes.push(status);
+          window.__externalMediaSmtcPushes = [];
+          if (typeof window.electron?.onExternalMediaStateChanged === 'function') {
+            window.electron.onExternalMediaStateChanged((status) => {
+              window.__externalMediaSmtcPushes.push(status);
             });
           }
           return true;
@@ -5085,14 +5438,14 @@ function createWindow(options = {}) {
 
       for (let attempt = 1; attempt <= 5; attempt += 1) {
         const raw = await win.webContents.executeJavaScript(
-          'window.electron.appleMusicGetState().then(s => JSON.stringify(s)).catch(e => JSON.stringify({ error: String(e && e.message || e) }))',
+          'window.electron.externalMediaGetState().then(s => JSON.stringify(s)).catch(e => JSON.stringify({ error: String(e && e.message || e) }))',
         );
         log(`pull#${attempt}`, JSON.parse(raw));
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
 
       const pushed = await win.webContents.executeJavaScript(
-        'JSON.stringify(window.__appleMusicSmtcPushes || [])',
+        'JSON.stringify(window.__externalMediaSmtcPushes || [])',
       );
       const pushes = JSON.parse(pushed);
       log('pushed-count', { count: pushes.length });
@@ -5107,7 +5460,7 @@ function createWindow(options = {}) {
         for (const request of PROBE_COMMANDS) {
           // eslint-disable-next-line no-await-in-loop
           const raw = await win.webContents.executeJavaScript(
-            `window.electron.appleMusicSendCommand(${JSON.stringify(request)})
+            `window.electron.externalMediaSendCommand(${JSON.stringify(request)})
                .then(r => JSON.stringify(r))
                .catch(e => JSON.stringify({ ok: false, command: ${JSON.stringify(request.command)}, targetAppUserModelId: null, error: String(e && e.message || e), errorKind: 'probe-error', completedAtMs: null }))`,
           );
@@ -5553,9 +5906,15 @@ app.on('before-quit', () => {
   displaySleepBlocker.stop();
   // Read-only bridge: nothing to restore, just stop the child so it cannot outlive the app. It
   // would also self-stop on stdin EOF, but disposing here releases the timers deterministically.
-  if (appleMusicSmtcBridge) {
-    appleMusicSmtcBridge.dispose();
-    appleMusicSmtcBridge = null;
+  if (externalMediaSmtcBridge) {
+    externalMediaSmtcBridge.dispose();
+    externalMediaSmtcBridge = null;
+  }
+  // Same reasoning for the extension bridge: close the loopback listener and fail any in-flight
+  // command, so a command cannot resolve against a main process that is already going away.
+  if (externalMediaBridge) {
+    void externalMediaBridge.stop().catch(() => { /* shutting down: nothing left to report to */ });
+    externalMediaBridge = null;
   }
   // Detach (graceful) instead of killing: the helper un-parents the window from the WorkerW
   // and repaints the layer before the window is destroyed — a window torn down while still
@@ -6354,34 +6713,147 @@ ipcMain.handle('playback-sync-bridge-get-status', (event) => {
   return buildPlaybackSyncBridgeStatus();
 });
 
-ipcMain.handle('apple-music-smtc-get-status', (event) => {
+ipcMain.handle('external-media-smtc-get-status', (event) => {
   if (!isTrustedMainWindowContents(event.sender)) {
-    throw new Error('Untrusted renderer attempted to read Apple Music SMTC status.');
+    throw new Error('Untrusted renderer attempted to read external media status.');
   }
 
-  // Lazy start: the helper process only exists once something actually asks about Apple Music.
-  return ensureAppleMusicSmtcBridge().getStatus();
+  // Lazy start: neither the helper process nor the loopback server exists until something actually
+  // asks about external media.
+  return buildExternalMediaStatus();
 });
 
-ipcMain.handle('apple-music-smtc-start', (event) => {
+ipcMain.handle('external-media-smtc-start', (event) => {
   if (!isTrustedMainWindowContents(event.sender)) {
-    throw new Error('Untrusted renderer attempted to start the Apple Music SMTC bridge.');
+    throw new Error('Untrusted renderer attempted to start the external media bridge.');
   }
 
-  return ensureAppleMusicSmtcBridge().getStatus();
+  return buildExternalMediaStatus();
 });
 
-// Phase 2 reverse channel. The request is validated inside the bridge — one source of truth for what
-// a well-formed command is — and always resolves with a structured result, so a rejected command is
-// a value here rather than a rejected IPC call the renderer would have to tell apart from a crash.
-// With no Apple Music session the reply is `session-not-found` and names no target, so the renderer
-// can show that nothing else was controlled.
-ipcMain.handle('apple-music-smtc-command', async (event, request) => {
+// The transport channel. Two bridges are involved and the split is by COMMAND, not by caller:
+//
+//   * play / pause / toggle / seek  → the extension bridge (the page owns the audio)
+//   * playById                      → the extension bridge (only the page can address a catalog id)
+//
+// The SMTC bridge's own command channel is deliberately NOT reachable from the renderer any more.
+// SMTC's `next`/`previous` would make the desktop-era mistake of letting the external player advance
+// its own internal queue instead of Folia's, and its `seek` is the one operation the desktop app
+// rejects outright (`IsPlaybackPositionEnabled === False`). Routing every transport command through
+// the extension keeps one command surface with one set of semantics.
+//
+// The request is validated inside the bridge — one source of truth for what a well-formed command is
+// — and always resolves with a structured result, so a refused command is a value here rather than a
+// rejected IPC call the renderer would have to tell apart from a crash. With no extension connected
+// the reply is `bridge-unavailable` and names no target, so the renderer can show that nothing else
+// was controlled.
+ipcMain.handle('external-media-smtc-command', async (event, request) => {
   if (!isTrustedMainWindowContents(event.sender)) {
-    throw new Error('Untrusted renderer attempted to send an Apple Music SMTC command.');
+    throw new Error('Untrusted renderer attempted to send an external media command.');
   }
 
-  return ensureAppleMusicSmtcBridge().sendCommand(request);
+  if (!isExternalMediaEnabled()) {
+    // A disabled backend refuses as a value (same shape as the bridge's own failures), so the
+    // renderer's `sendCommand` contract is unchanged: never a rejected promise.
+    const requested = request && typeof request === 'object' ? (request.command ?? request.kind) : null;
+    return {
+      ok: false,
+      command: typeof requested === 'string' ? requested : '',
+      targetSourceId: null,
+      error: 'the external media backend is disabled',
+      errorKind: 'bridge-unavailable',
+      completedAtMs: null,
+    };
+  }
+
+  return ensureExternalMediaBridge().sendCommand(request);
+});
+
+// Settings for the "Settings → External media" panel: the on/off switch (which gates both bridges),
+// the loopback port, and the extension token with its rotation. Same trust rule as every handler.
+ipcMain.handle('external-media-settings-get', (event) => {
+  if (!isTrustedMainWindowContents(event.sender)) {
+    throw new Error('Untrusted renderer attempted to read external media settings.');
+  }
+
+  return getExternalMediaSettings();
+});
+
+ipcMain.handle('external-media-settings-set', (event, settings) => {
+  if (!isTrustedMainWindowContents(event.sender)) {
+    throw new Error('Untrusted renderer attempted to change external media settings.');
+  }
+
+  return setExternalMediaEnabled(Boolean(settings && typeof settings === 'object' ? settings.enabled : false));
+});
+
+ipcMain.handle('external-media-token-regenerate', async (event) => {
+  if (!isTrustedMainWindowContents(event.sender)) {
+    throw new Error('Untrusted renderer attempted to regenerate the external media token.');
+  }
+
+  return regenerateExternalMediaToken();
+});
+
+// Apple Music library/content source IPC. Every handler follows the same two rules as the SMTC
+// ones: the sender must be the trusted main window, and the bridge resolves with a structured
+// result rather than rejecting, so the renderer branches on `errorKind` instead of having to tell
+// a refused request apart from a crashed main process.
+ipcMain.handle('apple-music-library-status', async (event) => {
+  if (!isTrustedMainWindowContents(event.sender)) {
+    throw new Error('Untrusted renderer attempted to read Apple Music library status.');
+  }
+
+  return appleMusicLibraryBridge.getStatus();
+});
+
+ipcMain.handle('apple-music-library-request', async (event, request) => {
+  if (!isTrustedMainWindowContents(event.sender)) {
+    throw new Error('Untrusted renderer attempted to call the Apple Music library bridge.');
+  }
+
+  const { operation, args } = request && typeof request === 'object' ? request : {};
+  const safeArgs = Array.isArray(args) ? args : [];
+  const options = safeArgs[0] && typeof safeArgs[0] === 'object' ? safeArgs[0] : {};
+
+  // Explicit allow-list rather than a dynamic property lookup: a compromised renderer must not be
+  // able to reach `resetCaches` or any future internal method by naming it.
+  switch (operation) {
+    case 'getLibraryPlaylists':
+      return appleMusicLibraryBridge.getLibraryPlaylists(options);
+    case 'getLibraryAlbums':
+      return appleMusicLibraryBridge.getLibraryAlbums(options);
+    case 'getLibrarySongs':
+      return appleMusicLibraryBridge.getLibrarySongs(options);
+    case 'getLibraryPlaylistTracks':
+      return appleMusicLibraryBridge.getLibraryPlaylistTracks(safeArgs[0], safeArgs[1] || {});
+    case 'getLibraryAlbumTracks':
+      return appleMusicLibraryBridge.getLibraryAlbumTracks(safeArgs[0], safeArgs[1] || {});
+    case 'getCatalogSongsByIds':
+      return appleMusicLibraryBridge.getCatalogSongsByIds(safeArgs[0], options);
+    case 'getCatalogPlaylist':
+      return appleMusicLibraryBridge.getCatalogPlaylist(safeArgs[0], safeArgs[1]);
+    case 'searchCatalog':
+      return appleMusicLibraryBridge.searchCatalog(safeArgs[0], options);
+    default:
+      return { ok: false, errorKind: 'invalid-request', message: `Unknown operation: ${String(operation)}` };
+  }
+});
+
+ipcMain.handle('apple-music-library-sign-in', async (event) => {
+  if (!isTrustedMainWindowContents(event.sender)) {
+    throw new Error('Untrusted renderer attempted to open the Apple Music sign-in window.');
+  }
+
+  return openAppleMusicSignInWindow();
+});
+
+ipcMain.handle('apple-music-library-sign-out', async (event) => {
+  if (!isTrustedMainWindowContents(event.sender)) {
+    throw new Error('Untrusted renderer attempted to sign out of Apple Music.');
+  }
+
+  return signOutAppleMusic();
 });
 
 ipcMain.handle('voice-input-pause-get-status', (event) => {

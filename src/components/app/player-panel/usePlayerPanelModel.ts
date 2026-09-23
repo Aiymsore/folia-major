@@ -11,10 +11,12 @@ import { useAudioSettingsStore } from '../../../stores/useAudioSettingsStore';
 import { useVisualizerSettingsStore } from '../../../stores/useVisualizerSettingsStore';
 import { usePlayerChromeSettingsStore } from '../../../stores/usePlayerChromeSettingsStore';
 import { useOnlineProviderAccountStore } from '../../../stores/useOnlineProviderAccountStore';
-// `selectDisplayCoverUrl` is gone from this import on purpose: the cover now comes from
-// `useEffectivePlaybackModel().coverUrl` (see below), which is the same value routed through the
-// selected backend. Keeping the selector here would leave an unused import behind.
-import { selectDisplayLyrics, usePlaybackStore } from '../../../stores/usePlaybackStore';
+// `selectDisplayCoverUrl` and `selectDisplayLyrics` are both gone from this import on purpose:
+// the cover now comes from `useEffectivePlaybackModel().coverUrl` and the lyrics from
+// `useDisplayLyrics()` (see below). Both route through the selected backend, which the raw
+// selectors cannot do — under Apple Music the folia-side values must read as null.
+import { usePlaybackStore } from '../../../stores/usePlaybackStore';
+import { useDisplayLyrics } from '../../../hooks/useDisplayLyrics';
 import { useEffectivePlaybackModel } from '../../../hooks/useEffectivePlayback';
 import type { LocalSong, SongResult } from '../../../types';
 import type { LocalLibraryCatalogSnapshot } from '../../../hooks/useLocalLibraryCatalog';
@@ -78,7 +80,7 @@ export const usePlayerPanelModel = ({
     const lyricTimelineOffsetMs = usePlaybackStore(state => state.lyricTimelineOffsetMs);
     const activePlaybackContext = usePlaybackStore(state => state.activePlaybackContext);
     const displayCoverUrl = useEffectivePlaybackModel().coverUrl;
-    const displayLyrics = usePlaybackStore(selectDisplayLyrics);
+    const displayLyrics = useDisplayLyrics();
 
     // 冗余但保留的订阅：`omni.isSongLiked` 走 getState 读账号 store，读不到变化。今天 App 已经
     // 通过 useOnlineProviderPlatform 订阅了整张 accounts 表，所以这里其实总会被重渲染带到；

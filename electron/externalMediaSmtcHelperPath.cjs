@@ -1,4 +1,4 @@
-// electron/appleMusicSmtcHelperPath.cjs
+// electron/externalMediaSmtcHelperPath.cjs
 // Locates folia-apple-music-smtc-helper.exe with a deterministic priority order.
 //
 // Split out of main.cjs for the same reason electron/modSystem/ffmpeg.cjs is its own module: the
@@ -42,7 +42,7 @@ const DEV_BUILD_DIR = 'build';
  * Returning null is a supported outcome: the bridge reports `helper-missing` and the UI shows
  * "unavailable". Apple Music support is additive and must never block app startup.
  */
-const resolveAppleMusicSmtcHelperPath = ({
+const resolveExternalMediaSmtcHelperPath = ({
     platform = process.platform,
     env = process.env,
     resourcesPath = process.resourcesPath,
@@ -77,7 +77,7 @@ const resolveAppleMusicSmtcHelperPath = ({
 };
 
 module.exports = {
-    resolveAppleMusicSmtcHelperPath,
+    resolveExternalMediaSmtcHelperPath,
     HELPER_BINARY_NAME,
     DEV_BUILD_DIR,
 };

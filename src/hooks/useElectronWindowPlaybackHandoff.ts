@@ -123,6 +123,10 @@ export function useElectronWindowPlaybackHandoff({
     const currentView = useAppViewStore(state => state.view);
     const activePlaybackContext = usePlaybackStore(state => state.activePlaybackContext);
     const currentSong = usePlaybackStore(state => state.currentSong);
+    // 刻意直读 Folia 的 raw 歌词，不走 useDisplayLyrics()：这个 hook 是 Folia 自己的**窗口切换
+    // 快照**读写器，restore 分支会把 snapshot 直接写回 usePlaybackStore（setCurrentSong /
+    // setLyrics / setAudioSrc）。它描述的是「Folia 那台机器在播什么」，与当前 backend 无关；
+    // 让 Apple Music 的歌词从这里经过，只会把外部应用的歌词写进 Folia 的槽位。
     const lyrics = usePlaybackStore(state => state.lyrics);
     const cachedCoverUrl = usePlaybackStore(state => state.cachedCoverUrl);
     const audioSrc = usePlaybackStore(state => state.audioSrc);

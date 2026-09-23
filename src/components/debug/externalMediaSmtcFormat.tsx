@@ -1,8 +1,8 @@
 import React from 'react';
 
-// src/components/debug/appleMusicSmtcFormat.tsx
-// Shared presentation helpers for the dev-only Apple Music SMTC diagnostic surface. Split out of
-// AppleMusicSmtcPanel so the status panel and the control panel render identical formatting instead
+// src/components/debug/externalMediaSmtcFormat.tsx
+// Shared presentation helpers for the dev-only external-media SMTC diagnostic surface. Split out of
+// ExternalMediaSmtcPanel so the status panel and the control panel render identical formatting instead
 // of keeping two copies of the same millisecond formatter.
 
 export const DASH = '—';
@@ -29,17 +29,20 @@ export const formatTimestamp = (value: number | null | undefined) => {
 
 /**
  * The command result as one short line for the diagnostic log. Kept terse on purpose: the panel
- * exists to show whether a command reached Apple Music, and `errorKind` is the machine-readable part
- * of that answer — the free-text `error` follows it for a human reading over the shoulder.
+ * exists to show whether a command reached the external player, and `errorKind` is the machine-readable
+ * part of that answer — the free-text `error` follows it for a human reading over the shoulder.
+ *
+ * `targetSourceId` is shown even on success: "which media source did this land on" is the question
+ * this panel answers, and a null target is the proof that nothing was controlled.
  */
 export const formatCommandResult = (result: {
     ok: boolean;
     command: string;
-    targetAppUserModelId: string | null;
+    targetSourceId: string | null;
     error: string | null;
     errorKind: string | null;
 }) => {
-    const target = result.targetAppUserModelId ? ` · ${result.targetAppUserModelId}` : ' · no target';
+    const target = result.targetSourceId ? ` · ${result.targetSourceId}` : ' · no target';
     if (result.ok) return `${result.command} → ok${target}`;
     const kind = result.errorKind ?? 'error';
     return `${result.command} → ${kind}${target}${result.error ? ` · ${result.error}` : ''}`;

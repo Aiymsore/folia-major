@@ -1,6 +1,6 @@
 // packaging/windows/apple-music-smtc-helper/src/events.rs
 // JSONL event protocol spoken on stdout between this helper and the Electron main process
-// (parsed by electron/appleMusicSmtcBridge.cjs). Pure string building — no WinRT — so the
+// (parsed by electron/externalMediaSmtcBridge.cjs). Pure string building — no WinRT — so the
 // snapshot-style unit tests below run on any host OS, matching the wallpaper helper's events.rs.
 //
 // Two properties are load-bearing for the consumer:
@@ -28,6 +28,17 @@ pub struct SessionSnapshot {
     /// When this snapshot was captured, as Unix epoch milliseconds (the same unit the Folia
     /// renderer uses for timestamps). Not the track's progress - see position_ms.
     pub updated_at_ms: u64,
+    /// When the *reported position* was established, as Unix epoch milliseconds.
+    ///
+    /// This is the OS's own `TimelineProperties.LastUpdatedTime`, which is the timestamp of the
+    /// timeline sample `position_ms` was read from — not when we happened to poll. It is the one
+    /// field that lets a consumer know how stale the position is without guessing: Apple Music
+    /// quantizes the position to whole seconds and only republishes the timeline about every
+    /// 250 ms, so the value read at any instant may be up to one republish period old.
+    ///
+    /// `None` when the timeline could not be read, which degrades this one field rather than the
+    /// whole snapshot (same rule as position/duration).
+    pub last_updated_ms: Option<u64>,
 }
 
 /// Structured result of one transport command, emitted as `{"event":"response",…}`.
@@ -123,9 +134,9 @@ pub enum Event {
     /// number of sessions visible at that moment, so the consumer can tell "manager up, Apple
     /// Music not running" from "manager never came up" without waiting for a snapshot.
     Ready { session_count: usize },
-    /// An Apple Music session is present and was read successfully.
+    /// The matched media session is present and was read successfully.
     Snapshot { snapshot: SessionSnapshot },
-    /// No Apple Music session is currently visible. This is the normal state when the app is
+    /// No matching media session is currently visible. This is the normal state when the app is
     /// closed or has nothing loaded; it is NOT an error, and the consumer is expected to clear
     /// its state on receiving it.
     NoSession,
@@ -208,6 +219,13 @@ impl SessionSnapshot {
     /// make every poll look like a change and turn the change-gated stream back into a stream of
     /// identical snapshots. `position_ms` IS included - it is the one field that legitimately
     /// moves during playback, and Apple Music moves it about once a second.
+    ///
+    /// `last_updated_ms` is excluded for the same reason as `updated_at_ms`: the OS re-stamps it
+    /// several times per position step (measured ~3.6 republishes per second of position), so
+    /// including it would emit a snapshot for every republish and defeat the change gate. A
+    /// consumer that needs the freshest stamp reads it off whichever snapshot it already has —
+    /// the value only ever moves forward, and `position_ms` (which IS gated) is what changes when
+    /// it matters.
     pub fn same_content_as(&self, previous: &SessionSnapshot) -> bool {
         self.source_app_user_model_id == previous.source_app_user_model_id
             && self.title == previous.title
@@ -232,7 +250,8 @@ impl SessionSnapshot {
                 "\"positionMs\":{},",
                 "\"durationMs\":{},",
                 "\"hasThumbnail\":{},",
-                "\"updatedAtMs\":{}}}"
+                "\"updatedAtMs\":{},",
+                "\"lastUpdatedMs\":{}}}"
             ),
             escape_json(&self.source_app_user_model_id),
             json_optional_string(&self.title),
@@ -243,6 +262,7 @@ impl SessionSnapshot {
             json_optional_u64(self.duration_ms),
             self.has_thumbnail,
             self.updated_at_ms,
+            json_optional_u64(self.last_updated_ms),
         )
     }
 }
@@ -321,7 +341,7 @@ mod tests {
 
     fn snapshot() -> SessionSnapshot {
         SessionSnapshot {
-            source_app_user_model_id: "AppleInc.AppleMusicWin_nzyj5cx40ttqa!App".to_string(),
+            source_app_user_model_id: "Chrome".to_string(),
             title: Some("MaringCode".to_string()),
             artist: Some("神楽 めあ — I'm Turning Into a Demon!".to_string()),
             album: None,
@@ -330,6 +350,7 @@ mod tests {
             duration_ms: Some(218000),
             has_thumbnail: true,
             updated_at_ms: 1789471213330,
+            last_updated_ms: Some(1789471213000),
         }
     }
 
@@ -340,7 +361,7 @@ mod tests {
             json,
             concat!(
                 "{\"event\":\"snapshot\",",
-                "\"sourceAppUserModelId\":\"AppleInc.AppleMusicWin_nzyj5cx40ttqa!App\",",
+                "\"sourceAppUserModelId\":\"Chrome\",",
                 "\"title\":\"MaringCode\",",
                 "\"artist\":\"神楽 めあ — I'm Turning Into a Demon!\",",
                 "\"album\":null,",
@@ -348,9 +369,33 @@ mod tests {
                 "\"positionMs\":13000,",
                 "\"durationMs\":218000,",
                 "\"hasThumbnail\":true,",
-                "\"updatedAtMs\":1789471213330}"
+                "\"updatedAtMs\":1789471213330,",
+                "\"lastUpdatedMs\":1789471213000}"
             )
         );
+    }
+
+    #[test]
+    fn a_republished_stamp_alone_is_not_a_content_change() {
+        // The OS re-stamps LastUpdatedTime several times per position step (~3.6 republishes per
+        // second of position, measured). If it counted as content, the change gate would emit a
+        // snapshot for every republish and the ~1 Hz stream would become a ~4 Hz one.
+        let first = snapshot();
+        let mut later = snapshot();
+        later.last_updated_ms = Some(1789471213250);
+        assert!(first.same_content_as(&later));
+
+        // position_ms, by contrast, is exactly what the gate exists to catch.
+        let mut moved = snapshot();
+        moved.position_ms = Some(14000);
+        assert!(!first.same_content_as(&moved));
+    }
+
+    #[test]
+    fn an_unreadable_timeline_reports_an_absent_stamp() {
+        let mut snapshot = snapshot();
+        snapshot.last_updated_ms = None;
+        assert!(snapshot.to_json().contains("\"lastUpdatedMs\":null"));
     }
 
     #[test]
@@ -455,7 +500,7 @@ mod tests {
 
     #[test]
     fn a_delivered_command_reports_its_target_and_no_error() {
-        let reply = CommandReply::delivered("c1", "play", "AppleInc.AppleMusicWin_nzyj5cx40ttqa!App", 123);
+        let reply = CommandReply::delivered("c1", "play", "Chrome", 123);
         assert_eq!(
             reply.to_json(),
             concat!(
@@ -463,7 +508,7 @@ mod tests {
                 "\"id\":\"c1\",",
                 "\"command\":\"play\",",
                 "\"ok\":true,",
-                "\"targetAppUserModelId\":\"AppleInc.AppleMusicWin_nzyj5cx40ttqa!App\",",
+                "\"targetAppUserModelId\":\"Chrome\",",
                 "\"error\":null,",
                 "\"errorKind\":null,",
                 "\"completedAtMs\":123}"
@@ -473,13 +518,13 @@ mod tests {
 
     #[test]
     fn a_missing_session_never_names_a_target() {
-        // The safety-critical case: no Apple Music session must report no target at all, so a
+        // The safety-critical case: no matching session must report no target at all, so a
         // consumer can tell "nothing was controlled" from "something else was controlled".
         let reply = CommandReply::failed(
             "c2",
             "next",
             ERR_KIND_SESSION_NOT_FOUND,
-            "no Apple Music session is visible",
+            "no matching media session is visible",
             None,
             456,
         );

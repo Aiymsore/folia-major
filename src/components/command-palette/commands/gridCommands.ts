@@ -1,4 +1,4 @@
-import { ArrowDownUp, CalendarClock, FolderSync, ListOrdered, PanelLeft, PanelRight, Pencil, RefreshCw, Share, SquarePen, Tags, Type } from 'lucide-react';
+import { ArrowDownUp, CalendarClock, FileUp, FolderSync, ListOrdered, PanelLeft, PanelRight, Pencil, RefreshCw, Share, SquarePen, Tags, Type } from 'lucide-react';
 import { createGridSurfaceCommand } from '../commandFactories';
 import type { CommandPaletteCommand } from '../types';
 
@@ -90,10 +90,18 @@ export const gridCommands: CommandPaletteCommand[] = [
     createGridSurfaceCommand(
         'grid-export-playlist',
         'Export this playlist',
-        'Save this local playlist as an m3u8 file',
-        ['m3u8', 'export', '导出'],
+        'Save this playlist as an m3u8 file, or as portable json when it mixes sources',
+        ['m3u8', 'json', 'export', '导出'],
         'export-playlist',
         Share,
+    ),
+    createGridSurfaceCommand(
+        'grid-import-playlist',
+        'Import a playlist file',
+        'Create a playlist from an m3u8 or portable json file',
+        ['import', 'm3u8', 'json', '导入歌单'],
+        'import-playlist',
+        FileUp,
     ),
     createGridSurfaceCommand(
         'grid-edit-entity',

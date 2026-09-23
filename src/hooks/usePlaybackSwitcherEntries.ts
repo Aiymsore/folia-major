@@ -2,12 +2,12 @@ import { useCallback, useMemo } from 'react';
 import type { OnlineProviderId, ProviderAccountSummary } from '../types/onlineMusic';
 import type { PlaybackSwitcherEntry } from '../types/playbackBackend';
 import { useActivePlaybackBackendStore } from '../stores/useActivePlaybackBackendStore';
-import { useAppleMusicSmtcStore } from '../stores/useAppleMusicSmtcStore';
+import { useExternalMediaStore } from '../stores/useExternalMediaStore';
 import { usePlaybackStore } from '../stores/usePlaybackStore';
-import { resolveAppleMusicAvailability } from '../utils/appleMusicSmtcStatus';
+import { resolveExternalMediaAvailability } from '../utils/externalMediaStatus';
 import {
-    isAppleMusicSelectable,
-    selectAppleMusicBackend,
+    isExternalMediaSelectable,
+    selectExternalMediaBackend,
     selectFoliaBackend,
 } from './usePlaybackBackendSwitch';
 
@@ -24,7 +24,7 @@ import {
 export type PlaybackSwitcherEntries = {
     entries: PlaybackSwitcherEntry[];
     /** 当前被选中的条目 id；Apple Music 被选中时 `activeProviderId` 保持用户上次的原生平台不动。 */
-    activeEntryId: OnlineProviderId | 'apple-music';
+    activeEntryId: OnlineProviderId | 'external-media';
     onSelectEntry: (entry: PlaybackSwitcherEntry) => void;
 };
 
@@ -48,17 +48,17 @@ export const usePlaybackSwitcherEntries = ({
     isStageActive,
 }: UsePlaybackSwitcherEntriesInput): PlaybackSwitcherEntries => {
     const backend = useActivePlaybackBackendStore(state => state.activeBackend);
-    const appleMusicStatus = useAppleMusicSmtcStore(state => state.status);
+    const appleMusicStatus = useExternalMediaStore(state => state.status);
 
-    const availability = resolveAppleMusicAvailability(appleMusicStatus ?? null);
+    const availability = resolveExternalMediaAvailability(appleMusicStatus ?? null);
 
     const appleMusicEntry = useMemo<PlaybackSwitcherEntry>(() => ({
-        kind: 'apple-music',
+        kind: 'external-media',
         status: availability,
-        isActive: backend === 'apple-music',
+        isActive: backend === 'external-media',
         // Stage 活跃时不可选。其余情况即使 Apple Music 没在运行也可选：选中后 UI 显示
         // not running 并禁用 transport，这正是用户被告知"去把 Apple Music 打开"的方式。
-        disabledReason: isAppleMusicSelectable(isStageActive) ? null : 'stage',
+        disabledReason: isExternalMediaSelectable(isStageActive) ? null : 'stage',
     }), [availability, backend, isStageActive]);
 
     const entries = useMemo<PlaybackSwitcherEntry[]>(() => [
@@ -73,14 +73,14 @@ export const usePlaybackSwitcherEntries = ({
     ], [activeProviderId, appleMusicEntry, backend, providers]);
 
     const onSelectEntry = useCallback((entry: PlaybackSwitcherEntry) => {
-        if (entry.kind === 'apple-music') {
+        if (entry.kind === 'external-media') {
             if (entry.disabledReason) return;
             // Read the raw transport at click time instead of subscribing to it: this hook lives in
             // Grid3D's tree, and `playerState` changes on every play/pause of every track — a
             // subscription here would re-render the grid surface for a value only a click needs.
             const foliaPlayerState = usePlaybackStore.getState().playerState;
             // Apple Music 只写 backend：activeProviderId 保持不变，用户切回来时无需恢复。
-            selectAppleMusicBackend(pauseFolia, foliaPlayerState);
+            selectExternalMediaBackend(pauseFolia, foliaPlayerState);
             return;
         }
 
@@ -91,7 +91,7 @@ export const usePlaybackSwitcherEntries = ({
 
     return {
         entries,
-        activeEntryId: backend === 'apple-music' ? 'apple-music' : activeProviderId,
+        activeEntryId: backend === 'external-media' ? 'external-media' : activeProviderId,
         onSelectEntry,
     };
 };

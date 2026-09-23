@@ -5,7 +5,10 @@ import { LyricParserFactory } from '../utils/lyrics/LyricParserFactory';
 import { getFromCacheWithMigration, getLocalSongs, removeFromCache, saveLocalSong, saveToCache } from '../services/db';
 import { getCachedCoverUrl, loadCachedOrFetchCover } from '../services/coverCache';
 import { ensureLocalSongCoverAsset, getAudioFromLocalSong } from '../services/localMusicService';
-import { addSongsToLocalPlaylist, buildCanonicalLocalSongIdIndex, createLocalPlaylist, getLocalPlaylists, setLocalSongFavorite } from '../services/localPlaylistService';
+// Merged import: upstream added `buildCanonicalLocalSongIdIndex`, our side added the entries-based
+// API (`addEntriesToLocalPlaylist` / `createLocalPlaylistFromEntries`, for cross-source playlists).
+// `addSongsToLocalPlaylist` is dropped — it has no call site left in this file.
+import { addEntriesToLocalPlaylist, buildCanonicalLocalSongIdIndex, createLocalPlaylist, createLocalPlaylistFromEntries, getLocalPlaylists, setLocalSongFavorite } from '../services/localPlaylistService';
 import { applyLocalLibraryEntityDisplay, buildLocalQueue, buildNavidromeQueue, buildUnifiedLocalSong, buildUnifiedNavidromeSong, resolveLocalSongMetadata } from '../services/playbackAdapters';
 import { getPrefetchedData } from '../services/prefetchService';
 import { retireBlobUrl } from '../services/playbackBlobUrls';
@@ -22,6 +25,9 @@ import {
     resolveNavidromePlaybackCarrier,
     getPlaybackSourceRef,
 } from '../utils/appPlaybackGuards';
+import { resolveAppleMusicLyrics } from '../services/appleMusicService';
+import { resolveExternalMediaPlayableId } from '../utils/externalMediaQueueReconcile';
+import { playExternalMediaTrack } from './useTransportDispatcher';
 import { hydrateNavidromeLyricPayload, resolvePreferredNavidromeLyrics } from '../utils/appNavidromeLyrics';
 import { migrateLyricDataRenderHints } from '../utils/lyrics/renderHints';
 import { migrateMatchedLyricsCarrierRenderHints } from '../utils/lyrics/storageMigration';
@@ -48,6 +54,7 @@ import { hasLocalSongCover } from '../utils/localSongCover';
 import { getLocalCoverAssetUrl } from '../services/localCoverAssetUrl';
 import { applyMatchedMetadata } from '../services/localLibraryCatalogService';
 import { buildLocalSongLyricMatchContext, shouldRefreshLocalSongLyricsFromMetadata, shouldRunLocalSongAutomaticMatch } from '../utils/lyrics/localSongMatchContext';
+import { buildPlaylistEntry, canPersistPlaylistEntry } from '../utils/playlistEntry';
 import { getLocalLibraryCatalogSnapshot } from '../services/localLibraryEntityRepository';
 import { setStatusMessage as setStatusMsg } from '../stores/useStatusMessageStore';
 import { useLyricSettingsStore } from '../stores/useLyricSettingsStore';
@@ -109,6 +116,8 @@ export function useLibraryPlaybackController({
     const audioQuality = useAudioSettingsStore(state => state.audioQuality);
     const queueAddBehavior = useAudioSettingsStore(state => state.queueAddBehavior);
     const currentSong = usePlaybackStore(state => state.currentSong);
+    // 刻意直读 raw：这里是 Folia 的曲目装载管线（歌词匹配/切分/缓存都挂在这条链上），
+    // 它只处理 Folia 的曲目，因此读的必须是 Folia 自己的那份歌词。
     const lyrics = usePlaybackStore(state => state.lyrics);
     const playQueue = usePlaybackStore(state => state.playQueue);
     const starredNavidromeSongIds = useLibraryStore(state => state.starredNavidromeSongIds);
@@ -255,32 +264,49 @@ export function useLibraryPlaybackController({
             throw new Error('Playlist name is empty');
         }
 
-        // TODO: Define cross-source playlist export before allowing mixed queues to be saved.
-        if (hasMixedPlaybackSources(playQueue)) {
-            throw new Error('Mixed-source queues cannot be saved as playlists yet');
-        }
-
+        // 全本地队列走原有的 songIds 快路径（旧编辑/导出行为不变）；混合队列存 entries。
         const queueSongs = playQueue
             .map(resolveLocalSongRecord)
             .filter((song): song is LocalSong => Boolean(song?.id));
+        const allLocal = playQueue.length > 0 && queueSongs.length === playQueue.length;
 
-        if (!queueSongs.length) {
-            throw new Error('No local songs in queue');
+        if (allLocal) {
+            await createLocalPlaylist(trimmedName, queueSongs);
+            await loadLocalPlaylists();
+            return;
         }
 
-        await createLocalPlaylist(trimmedName, queueSongs);
+        // 不可回放条目（stage、无 catalogId 的资料库上传曲目、本地文件已不在曲库）直接剔除。
+        const validEntries = playQueue
+            .filter(song => canPersistPlaylistEntry(song))
+            .filter(song => !isLocalPlaybackSong(song) || Boolean(resolveLocalSongRecord(song)))
+            .map(song => buildPlaylistEntry(song, { localSongs }))
+            .filter((entry): entry is NonNullable<ReturnType<typeof buildPlaylistEntry>> => Boolean(entry));
+
+        if (!validEntries.length) {
+            throw new Error('No playable songs in queue');
+        }
+
+        await createLocalPlaylistFromEntries(trimmedName, validEntries);
         await loadLocalPlaylists();
-    }, [loadLocalPlaylists, playQueue, resolveLocalSongRecord]);
+        const skippedCount = playQueue.length - validEntries.length;
+        if (skippedCount > 0) {
+            setStatusMsg({
+                type: 'success',
+                text: (t('status.playlistSavedWithSkipped') || '').replace('{{count}}', String(skippedCount)),
+            });
+        }
+    }, [loadLocalPlaylists, localSongs, playQueue, resolveLocalSongRecord, setStatusMsg, t]);
 
     const addCurrentSongToLocalPlaylist = useCallback(async (playlistId: string) => {
-        const localSong = resolveLocalSongRecord(currentSong);
-        if (!isLocalPlaybackSong(currentSong) || !localSong) {
-            throw new Error('Current song is not local');
+        const entry = buildPlaylistEntry(currentSong, { localSongs });
+        if (!entry) {
+            throw new Error('Current song cannot be saved to a playlist');
         }
 
-        await addSongsToLocalPlaylist(playlistId, [localSong]);
+        await addEntriesToLocalPlaylist(playlistId, [entry]);
         await loadLocalPlaylists();
-    }, [currentSong, loadLocalPlaylists, resolveLocalSongRecord]);
+    }, [currentSong, loadLocalPlaylists, localSongs]);
 
     const createCurrentLocalPlaylist = useCallback(async (name: string) => {
         const trimmedName = name.trim();
@@ -288,15 +314,21 @@ export function useLibraryPlaybackController({
             throw new Error('Playlist name is empty');
         }
 
-        const localSong = resolveLocalSongRecord(currentSong);
-        if (!isLocalPlaybackSong(currentSong) || !localSong) {
-            throw new Error('Current song is not local');
+        const entry = buildPlaylistEntry(currentSong, { localSongs });
+        if (!entry) {
+            throw new Error('Current song cannot be saved to a playlist');
         }
 
-        await createLocalPlaylist(trimmedName, [localSong]);
+        // 纯本地仍走 songIds 快路径；跨来源条目建 entries 歌单。
+        const localSong = resolveLocalSongRecord(currentSong);
+        if (localSong) {
+            await createLocalPlaylist(trimmedName, [localSong]);
+        } else {
+            await createLocalPlaylistFromEntries(trimmedName, [entry]);
+        }
         await loadLocalPlaylists();
         setStatusMsg({ type: 'success', text: t('status.playlistUpdated') || '' });
-    }, [currentSong, loadLocalPlaylists, resolveLocalSongRecord, setStatusMsg, t]);
+    }, [currentSong, loadLocalPlaylists, localSongs, resolveLocalSongRecord, setStatusMsg, t]);
 
     const addCurrentSongToOnlinePlaylist = useCallback(async (playlist: ProviderCollection) => {
         if (!currentSong) throw new Error('No current song');
@@ -880,6 +912,116 @@ export function useLibraryPlaybackController({
         setStatusMsg({ type: 'info', text: t('navidrome.fetchingLyrics')});
     }, [setStatusMsg, t]);
 
+    /**
+     * Plays an Apple Music track through the external media backend.
+     *
+     * This is a distinct path rather than a fallthrough to the online one because Apple Music has no
+     * Omni provider: there is no audio-source endpoint to call, and Folia never decodes these bytes.
+     * Instead Folia records the track as its current song and queue entry, then asks
+     * music.apple.com (in Chrome, through the extension) to play the **catalog id**.
+     *
+     * Three things are deliberately different from the preview path this replaced:
+     *
+     *   1. **No `setAudioSrc`.** Folia's `<audio>` element is not involved, so there is no source to
+     *      load and `audioSrc` must stay null — pointing it at anything would make Folia's deck try
+     *      to decode a stream it cannot play, and `onEnded` on that deck would fire against a track
+     *      the external player is already handling.
+     *   2. **No preview-availability gate.** Playability is now "has a catalog id"; the check below
+     *      reports the honest failure (`no catalog entry`) instead of a preview-specific message.
+     *   3. **The play request is awaited and its result is surfaced.** The preview path could not
+     *      fail in a user-visible way (the URL was already on the song). Now the request goes through
+     *      the extension, so a disconnected extension or a signed-out page has to reach the user
+     *      rather than silently leaving a track "playing" that nothing is playing.
+     *
+     * Lyrics still come from AMLL's TTML database, keyed by the catalog id, and are still resolved
+     * after playback starts so a slow lookup never delays the track.
+     */
+    const onPlayExternalMediaSong = useCallback(async (
+        song: SongResult,
+        queue: SongResult[] = [],
+        options: PlaybackNavigationOptions = {},
+    ) => {
+        interruptStagePlaybackForMainTransition();
+
+        const shouldNavigateToPlayer = options.shouldNavigateToPlayer ?? true;
+        const playableId = resolveExternalMediaPlayableId(song);
+        if (!playableId) {
+            // A library upload with no catalog entry cannot be addressed at all: there is no
+            // catalog resource to name, so no way to ask the web player for it. Say so instead of
+            // failing silently.
+            setStatusMsg({ type: 'info', text: t('appleMusic.noCatalogEntry') });
+            return;
+        }
+
+        setIsLyricsLoading(true);
+        try {
+            const songKey = getPlaybackSongKey(song);
+            shouldAutoPlayRef.current = true;
+            currentSongRef.current = songKey;
+            setLyrics(null);
+            setCurrentLineIndex(-1);
+            currentTime.set(0);
+            setCurrentSong(song);
+            setManagedCachedCoverUrl(song.album?.coverUrl ?? null);
+            // Folia's deck stays silent and unloaded: the external player owns the audio.
+            setAudioSrc(null);
+            const finalQueue = options.unifiedQueue
+                ? replacePlaybackSongInQueue(options.unifiedQueue, song)
+                : queue.length > 0
+                    ? queue
+                    : [song];
+            setPlayQueue(finalQueue);
+            void persistLastPlaybackCache(song, finalQueue);
+            if (shouldNavigateToPlayer) {
+                navigateToPlaybackView();
+            }
+            setPlayerState(PlayerState.IDLE);
+            void restoreCachedThemeForSong(song).catch((error) => {
+                console.warn('[ExternalMedia] Theme load error', error);
+            });
+
+            // Hand the track to the external player. A false result means the request never reached
+            // music.apple.com (extension disconnected, no tab, signed out, storefront mismatch, or
+            // the page declined). The queue entry stays — the user can retry once the extension is
+            // connected — but the user is told, because the alternative is a "playing" UI over
+            // silence.
+            const dispatched = await playExternalMediaTrack(playableId);
+            if (!dispatched) {
+                setStatusMsg({ type: 'error', text: t('appleMusic.playRequestFailed') });
+                return;
+            }
+
+            const resolvedLyrics = await resolveAppleMusicLyrics(song);
+            if (currentSongRef.current === songKey && resolvedLyrics) {
+                setLyrics(resolvedLyrics);
+                setCurrentLineIndex(-1);
+            }
+        } catch (error) {
+            console.error('[ExternalMedia] Failed to dispatch playback:', error);
+            setStatusMsg({ type: 'error', text: t('status.playbackFailed') });
+        } finally {
+            setIsLyricsLoading(false);
+        }
+    }, [
+        currentSongRef,
+        currentTime,
+        interruptStagePlaybackForMainTransition,
+        navigateToPlaybackView,
+        persistLastPlaybackCache,
+        restoreCachedThemeForSong,
+        setAudioSrc,
+        setManagedCachedCoverUrl,
+        setCurrentLineIndex,
+        setCurrentSong,
+        setIsLyricsLoading,
+        setLyrics,
+        setPlayQueue,
+        setPlayerState,
+        setStatusMsg,
+        shouldAutoPlayRef,
+        t,
+    ]);
+
     const handleUpdateLocalLyrics = useCallback(async (content: string, isTranslation: boolean, fileName?: string) => {
         if (!isLocalPlaybackSong(currentSong)) return;
 
@@ -1441,6 +1583,7 @@ export function useLibraryPlaybackController({
         handleLocalQueueAdd,
         onPlayLocalSong,
         onPlayNavidromeSong,
+        onPlayExternalMediaSong,
         onMatchNavidromeSong,
         handleUpdateLocalLyrics,
         handleChangeLyricsSource,

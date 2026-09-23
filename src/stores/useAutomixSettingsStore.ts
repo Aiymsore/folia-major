@@ -52,6 +52,20 @@ const TRANSITION_ANIMATION_KEY = 'folia_transition_animation';
 const TRANSITION_ANIMATION_CARD_KEY = 'folia_transition_animation_card';
 
 /**
+ * 「beat_this 跑 CPU」的开关（挂账 8a）：面向「打游戏要零显卡占用」的用户。
+ *
+ * 默认关：beat_this 在 WebGPU 上有截止期优势。打开后 beat 检测全程走 CPU（复用
+ * `FOLIA_ANALYSIS_FORCE_CPU` 管道，与「GPU 卡死后降级」同一条路），代价是分析略慢。
+ * 开关值要推给主进程，因为 provider 选择发生在 fork 出来的 worker 里（见 analysis/host.cjs）。
+ */
+const BEAT_THIS_CPU_ONLY_KEY = 'folia_beat_this_cpu_only';
+
+const pushBeatThisCpuOnlyToMain = (enable: boolean): void => {
+    if (typeof window === 'undefined') return;
+    window.electron?.setAutomixBeatThisCpuOnly?.(enable);
+};
+
+/**
  * The card border's switch, seeded once from the switch the two renderers used to share.
  *
  * Before the split, that switch on meant the card's border was what you actually saw on the lyrics
@@ -113,6 +127,8 @@ export type AutomixSettingsState = {
      * animation on and never seeing the ring again on the page most people watch.
      */
     transitionAnimationCard: boolean;
+    /** beat_this 跑 CPU（零显卡占用）。见 BEAT_THIS_CPU_ONLY_KEY。 */
+    beatThisCpuOnly: boolean;
     handleToggleAutomix: (enable: boolean) => void;
     /** Closes the model prompt. `mute` is the listener choosing never to see it again. */
     dismissAutomixModelReminder: (mute: boolean) => void;
@@ -121,6 +137,7 @@ export type AutomixSettingsState = {
     handleToggleTransitionPerformance: (enable: boolean) => void;
     handleToggleTransitionAnimation: (enable: boolean) => void;
     handleToggleTransitionAnimationCard: (enable: boolean) => void;
+    handleToggleBeatThisCpu: (enable: boolean) => void;
 };
 
 export const useAutomixSettingsStore = create<AutomixSettingsState>((set, get) => ({
@@ -135,6 +152,7 @@ export const useAutomixSettingsStore = create<AutomixSettingsState>((set, get) =
     // choice to make rather than one to arrive at after an update.
     transitionAnimation: getStoredBoolean(TRANSITION_ANIMATION_KEY, false),
     transitionAnimationCard: readTransitionAnimationCard(),
+    beatThisCpuOnly: getStoredBoolean(BEAT_THIS_CPU_ONLY_KEY, false),
     handleToggleAutomix: (enable) => {
         setStoredBoolean(AUTOMIX_ENABLED_KEY, enable);
         // Asked here rather than in the settings section because there are two switches - the
@@ -172,7 +190,16 @@ export const useAutomixSettingsStore = create<AutomixSettingsState>((set, get) =
         setStoredBoolean(TRANSITION_ANIMATION_CARD_KEY, enable);
         set({ transitionAnimationCard: enable });
     },
+    handleToggleBeatThisCpu: (enable) => {
+        setStoredBoolean(BEAT_THIS_CPU_ONLY_KEY, enable);
+        pushBeatThisCpuOnlyToMain(enable);
+        set({ beatThisCpuOnly: enable });
+    },
 }));
+
+// 持久化值在模块加载时就推给主进程：provider 选择在 worker fork 时刻定，
+// 启动后第一次分析不能先走一遍 GPU 再被开关纠正。
+pushBeatThisCpuOnlyToMain(getStoredBoolean(BEAT_THIS_CPU_ONLY_KEY, false));
 
 /**
  * The AutomixSettings half of the former settings snapshot, for the surfaces that
@@ -186,6 +213,7 @@ export const selectAutomixSettingsSnapshot = (state: AutomixSettingsState) => ({
     transitionPerformance: state.transitionPerformance,
     transitionAnimation: state.transitionAnimation,
     transitionAnimationCard: state.transitionAnimationCard,
+    beatThisCpuOnly: state.beatThisCpuOnly,
     handleToggleAutomix: state.handleToggleAutomix,
     dismissAutomixModelReminder: state.dismissAutomixModelReminder,
     handleSetTransitionMode: state.handleSetTransitionMode,
@@ -193,4 +221,5 @@ export const selectAutomixSettingsSnapshot = (state: AutomixSettingsState) => ({
     handleToggleTransitionPerformance: state.handleToggleTransitionPerformance,
     handleToggleTransitionAnimation: state.handleToggleTransitionAnimation,
     handleToggleTransitionAnimationCard: state.handleToggleTransitionAnimationCard,
+    handleToggleBeatThisCpu: state.handleToggleBeatThisCpu,
 });

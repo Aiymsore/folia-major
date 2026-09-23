@@ -43,6 +43,21 @@ export interface AutoMatchBestLyricOptions {
         songId: number | string;
     };
     exactMatchOnly?: boolean;
+    /**
+     * Accept a line-level (non-word-by-word) lyric when no word-by-word source matched.
+     *
+     * Why this is a separate switch rather than a side effect of `exactMatchOnly`: the two describe
+     * different questions. `exactMatchOnly` is about *which candidate* is acceptable (an explicitly
+     * selected id), while this one is about *what quality of timing* is acceptable. Callers that
+     * have no other fallback — the Apple Music backend, whose song is not in any provider catalogue —
+     * need the second question answered "line level is fine", otherwise a track whose only available
+     * lyric is plain LRC ends up showing nothing at all.
+     *
+     * The candidate still has to clear the same identity bar (`selectBestCandidate`: title/identity
+     * match plus `AUTO_MATCH_MIN_SCORE`), so this widens the accepted *timing granularity*, never the
+     * accepted *song*.
+     */
+    acceptLineLevelLyrics?: boolean;
     providerCandidate?: AutoMatchProviderCandidate;
     /** @deprecated Use providerCandidate so the baseline follows the song's provider. */
     neteaseCandidate?: {
@@ -396,6 +411,24 @@ export async function autoMatchBestLyric(
         };
     };
 
+    // 行级歌词的兜底候选。**只在没有任何逐字来源命中时才使用**，因此它必须记住第一个可用的
+    // 行级结果、然后继续往下找逐字歌词 —— 直接 return 会让本来有逐字歌词的歌退化到行级。
+    //
+    // 存的是 thunk 而不是成品：构造结果可能要跑一次 chorus 解析（网络请求），
+    // 为一个最终可能被逐字结果取代的候选提前付这笔开销不值得。
+    let lineLevelFallback: (() => Promise<AutoMatchBestLyricMatch>) | null = null;
+
+    const rememberLineLevel = (
+        build: () => Promise<AutoMatchBestLyricMatch>,
+        source: LyricProviderSource,
+    ): void => {
+        if (!options.acceptLineLevelLyrics || lineLevelFallback) {
+            return;
+        }
+        console.log(`[autoMatchBestLyric] ${source} has line-level lyrics only; keeping as fallback while word-by-word sources are tried.`);
+        lineLevelFallback = build;
+    };
+
     for (const searchSource of searchOrder) {
         if (searchSource === 'netease') {
             // 1. NetEase Music
@@ -434,6 +467,14 @@ export async function autoMatchBestLyric(
                         }
                         lineByLineFallback ??= match;
                         console.log(`[autoMatchBestLyric] Keeping NetEase line-by-line lyrics as fallback while checking for word-by-word lyrics.`);
+                    }
+                    if (processed.lyrics) {
+                        rememberLineLevel(async () => ({
+                            lyrics: await resolveMatchedLyrics(processed.lyrics!, processed, 'netease', song),
+                            source: 'netease',
+                            id: song.id,
+                            song,
+                        }), 'netease');
                     }
                 }
             } catch (error) {
@@ -503,6 +544,15 @@ export async function autoMatchBestLyric(
                         lineByLineFallback ??= match;
                         console.log(`[autoMatchBestLyric] Keeping QQ line-by-line lyrics as fallback while checking for word-by-word lyrics.`);
                     }
+                    if (parsedLyrics) {
+                        rememberLineLevel(async () => ({
+                            lyrics: parsedLyrics,
+                            source: 'qq',
+                            id: song.id,
+                            qqMid: song.qqMid,
+                            song,
+                        }), 'qq');
+                    }
                 }
             } catch (error) {
                 console.error(`[autoMatchBestLyric] QQ search/fetch failed:`, error);
@@ -536,11 +586,38 @@ export async function autoMatchBestLyric(
                         lineByLineFallback ??= match;
                         console.log(`[autoMatchBestLyric] Keeping Kugou line-by-line lyrics as fallback while checking for word-by-word lyrics.`);
                     }
+                    if (processed?.lyrics) {
+                        rememberLineLevel(async () => ({
+                            lyrics: await resolveMatchedLyrics(processed.lyrics!, processed, 'kugou', song),
+                            source: 'kugou',
+                            id: song.id,
+                            kgHash: song.kgHash,
+                            song,
+                        }), 'kugou');
+                    }
                 }
             } catch (error) {
                 console.error(`[autoMatchBestLyric] Kugou search/fetch failed:`, error);
             }
         }
+    }
+
+    // 行级兜底有**两条**独立实现的路径，两边各自加的，合并时都保留、按优先级排列：
+    //
+    //   1. `lineLevelFallback`（本分支）：调用方显式 opt-in（`acceptLineLevelLyrics`）时才记录，
+    //      存的是 thunk，命中时重新跑一次 `resolveMatchedLyrics`（含 chorus 解析），结果更完整。
+    //   2. `lineByLineFallback`（上游）：搜索过程中见过的**最高分**行级匹配，无条件记录。
+    //
+    // 先试 1 再试 2：调用方既然显式要了行级歌词，就走那条更完整的路；没 opt-in 的调用方
+    // 仍由上游那条兜底，行为不回退。两条都只放宽**时间粒度**，不放宽**曲目身份** —— 候选
+    // 都过了同一套身份与分数门槛。
+    //
+    // 读进局部常量是必要的：`lineLevelFallback` 只在闭包里被赋值，TS 的控制流分析会把它在
+    // 这里的类型收窄成 `null`，直接调用会报「not callable」。
+    const lineLevelResult = lineLevelFallback as (() => Promise<AutoMatchBestLyricMatch>) | null;
+    if (lineLevelResult) {
+        console.log('[autoMatchBestLyric] No word-by-word match; falling back to the line-level lyric.');
+        return await lineLevelResult();
     }
 
     if (lineByLineFallback) {

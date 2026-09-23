@@ -1,4 +1,6 @@
 import { LocalPlaylist, LocalSong } from '../types';
+import type { PlaylistEntry } from '../types/playlist';
+import { getPlaylistEntryKey, localSongToPlaylistEntry, parsePlaylistEntry } from '../utils/playlistEntry';
 import { getFromCache, getLocalSongs, saveToCache } from './db';
 
 const LOCAL_PLAYLISTS_CACHE_KEY = 'local_playlists';
@@ -210,19 +212,40 @@ const resolvePlaylistSongIds = (playlist: LegacyLocalPlaylist): string[] => {
     return [];
 };
 
-const normalizePlaylist = (playlist: LegacyLocalPlaylist): LocalPlaylist => ({
-    id: typeof playlist.id === 'string' && playlist.id ? playlist.id : createPlaylistId(),
-    name: typeof playlist.name === 'string' && playlist.name
-        ? playlist.name
-        : (playlist.isFavorite ? FAVORITE_PLAYLIST_NAME : UNNAMED_PLAYLIST_NAME),
-    songIds: resolvePlaylistSongIds(playlist),
-    createdAt: typeof playlist.createdAt === 'number' ? playlist.createdAt : Date.now(),
-    updatedAt: typeof playlist.updatedAt === 'number' ? playlist.updatedAt : Date.now(),
-    isFavorite: Boolean(playlist.isFavorite),
-});
+// 跨来源条目逐条校验后保留（坏记录直接丢弃，不给播放路径喂脏数据）。
+const resolvePlaylistEntries = (playlist: LegacyLocalPlaylist): PlaylistEntry[] | undefined => {
+    if (!Array.isArray(playlist.entries)) {
+        return undefined;
+    }
+
+    const entries = playlist.entries
+        .map(entry => parsePlaylistEntry(entry))
+        .filter((entry): entry is PlaylistEntry => Boolean(entry));
+
+    return entries;
+};
+
+const normalizePlaylist = (playlist: LegacyLocalPlaylist): LocalPlaylist => {
+    const entries = resolvePlaylistEntries(playlist);
+    return {
+        id: typeof playlist.id === 'string' && playlist.id ? playlist.id : createPlaylistId(),
+        name: typeof playlist.name === 'string' && playlist.name
+            ? playlist.name
+            : (playlist.isFavorite ? FAVORITE_PLAYLIST_NAME : UNNAMED_PLAYLIST_NAME),
+        songIds: resolvePlaylistSongIds(playlist),
+        ...(entries ? { entries } : {}),
+        createdAt: typeof playlist.createdAt === 'number' ? playlist.createdAt : Date.now(),
+        updatedAt: typeof playlist.updatedAt === 'number' ? playlist.updatedAt : Date.now(),
+        isFavorite: Boolean(playlist.isFavorite),
+    };
+};
 
 const playlistNeedsNormalization = (playlist: LegacyLocalPlaylist): boolean => {
     if (!Array.isArray(playlist.songIds)) {
+        return true;
+    }
+
+    if (playlist.entries !== undefined && resolvePlaylistEntries(playlist)?.length !== playlist.entries.length) {
         return true;
     }
 
@@ -368,6 +391,90 @@ export const removeSongsFromLocalPlaylist = async (playlistId: string, songIds: 
     return updateLocalPlaylist(playlistId, playlist => ({
         ...playlist,
         songIds: playlist.songIds.filter(songId => !removingIds.has(songId)),
+        // entries 歌单里同名的 local 条目一并删（删除入口仍按 songIds 语义）。
+        ...(playlist.entries
+            ? { entries: playlist.entries.filter(entry => !(entry.sourceRef.kind === 'local' && removingIds.has(entry.sourceRef.mediaId))) }
+            : {}),
+    }));
+};
+
+// --- 跨来源歌单条目（LocalPlaylist.entries）---
+
+/** 按条目创建跨来源歌单。songIds 保持为空：entries 是这类歌单的唯一顺序来源。 */
+export const createLocalPlaylistFromEntries = async (name: string, entries: PlaylistEntry[]): Promise<LocalPlaylist> => {
+    const playlists = await getLocalPlaylists();
+    const now = Date.now();
+    const playlist: LocalPlaylist = {
+        id: createPlaylistId(),
+        name: name.trim(),
+        songIds: [],
+        entries: dedupePlaylistEntries(entries),
+        createdAt: now,
+        updatedAt: now,
+    };
+
+    await persistPlaylists([...playlists, playlist]);
+    return playlist;
+};
+
+const dedupePlaylistEntries = (entries: PlaylistEntry[]): PlaylistEntry[] => {
+    const seen = new Set<string>();
+    const deduped: PlaylistEntry[] = [];
+
+    entries.forEach(entry => {
+        const key = getPlaylistEntryKey(entry);
+        if (seen.has(key)) {
+            return;
+        }
+        seen.add(key);
+        deduped.push(entry);
+    });
+
+    return deduped;
+};
+
+/** 追加跨来源条目。本地条目同时补进 songIds（保持旧读者/旧编辑路径可见）。 */
+export const addEntriesToLocalPlaylist = async (playlistId: string, entries: PlaylistEntry[]): Promise<LocalPlaylist | null> => {
+    const hasCrossSourceEntry = entries.some(entry => entry.sourceRef.kind !== 'local');
+    // 纯本地旧歌单首次引入跨来源条目时，先把 songIds 具象化成条目，避免旧歌被 entries 藏掉。
+    const localSongs = hasCrossSourceEntry ? await getLocalSongs() : [];
+    const songById = new Map(localSongs.map(song => [song.id, song]));
+
+    return updateLocalPlaylist(playlistId, playlist => {
+        // 「Liked Songs」保持本地专属语义（喜欢状态按 songIds/ provider 各自维护），只收本地条目。
+        const acceptedEntries = playlist.isFavorite
+            ? entries.filter(entry => entry.sourceRef.kind === 'local')
+            : entries;
+        const acceptedLocalSongIds = acceptedEntries
+            .filter(entry => entry.sourceRef.kind === 'local')
+            .map(entry => entry.localSongId ?? entry.sourceRef.mediaId);
+
+        const existingEntries = playlist.entries
+            ?? (hasCrossSourceEntry && acceptedEntries.length > 0
+                ? playlist.songIds
+                    .map(songId => songById.get(songId))
+                    .filter((song): song is LocalSong => Boolean(song))
+                    .map(localSongToPlaylistEntry)
+                : undefined);
+
+        return {
+            ...playlist,
+            songIds: dedupeSongIds([...playlist.songIds, ...acceptedLocalSongIds]),
+            ...(existingEntries && acceptedEntries.length > 0
+                ? { entries: dedupePlaylistEntries([...existingEntries, ...acceptedEntries]) }
+                : {}),
+        };
+    });
+};
+
+/** 按条目键移除（歌单编辑模式的跨来源删除入口）。 */
+export const removeEntriesFromLocalPlaylist = async (playlistId: string, entryKeys: string[]): Promise<LocalPlaylist | null> => {
+    const removingKeys = new Set(entryKeys);
+    return updateLocalPlaylist(playlistId, playlist => ({
+        ...playlist,
+        ...(playlist.entries
+            ? { entries: playlist.entries.filter(entry => !removingKeys.has(getPlaylistEntryKey(entry))) }
+            : {}),
     }));
 };
 

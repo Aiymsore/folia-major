@@ -3,7 +3,7 @@ import path from 'path';
 import { describe, expect, it } from 'vitest';
 import packageJson from '../../../package.json';
 
-// test/unit/electron/appleMusicSmtcHelperPath.test.ts
+// test/unit/electron/externalMediaSmtcHelperPath.test.ts
 //
 // Locks the helper resolution priority: FOLIA_APPLE_MUSIC_SMTC_HELPER_PATH → <resources>/…exe →
 // <repo>/build/…exe (dev only) → null.
@@ -19,11 +19,11 @@ import packageJson from '../../../package.json';
 
 const require = createRequire(import.meta.url);
 const {
-    resolveAppleMusicSmtcHelperPath,
+    resolveExternalMediaSmtcHelperPath,
     HELPER_BINARY_NAME,
     DEV_BUILD_DIR,
-} = require('../../../electron/appleMusicSmtcHelperPath.cjs') as {
-    resolveAppleMusicSmtcHelperPath: (options: {
+} = require('../../../electron/externalMediaSmtcHelperPath.cjs') as {
+    resolveExternalMediaSmtcHelperPath: (options: {
         platform?: string;
         env?: Record<string, string | undefined>;
         resourcesPath?: string;
@@ -55,7 +55,7 @@ const resolveWith = ({
     isPackaged?: boolean;
     appPath?: string;
     existing?: string[];
-} = {}) => resolveAppleMusicSmtcHelperPath({
+} = {}) => resolveExternalMediaSmtcHelperPath({
     platform,
     env,
     resourcesPath,
@@ -64,7 +64,7 @@ const resolveWith = ({
     fileExists: candidate => existing.includes(candidate),
 });
 
-describe('resolveAppleMusicSmtcHelperPath', () => {
+describe('resolveExternalMediaSmtcHelperPath', () => {
     it('is Windows-only', () => {
         expect(resolveWith({ platform: 'linux', existing: [PACKAGED, DEV_BUILD] })).toBeNull();
         expect(resolveWith({ platform: 'darwin', existing: [PACKAGED, DEV_BUILD] })).toBeNull();
@@ -110,7 +110,7 @@ describe('resolveAppleMusicSmtcHelperPath', () => {
     it('never uses a dev artifact in a packaged app', () => {
         // A release install that somehow has <repo>/build around must still report unavailable.
         let probedDevPath = false;
-        const resolved = resolveAppleMusicSmtcHelperPath({
+        const resolved = resolveExternalMediaSmtcHelperPath({
             platform: 'win32',
             env: {},
             resourcesPath: RESOURCES,

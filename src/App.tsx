@@ -129,7 +129,7 @@ import { useSettingsModalStore } from './stores/useSettingsModalStore';
 import { audioBands, audioPower, bass, currentTime, lowMid, lyricCurrentTime, mid, spectrum, treble, vocal } from './stores/motionSignals';
 import { useAppChromeStore } from './stores/useAppChromeStore';
 import { useAppViewStore } from './stores/useAppViewStore';
-import { startAppleMusicSmtcSubscription } from './stores/useAppleMusicSmtcStore';
+import { startExternalMediaSubscription } from './stores/useExternalMediaStore';
 import { selectDisplayCoverUrl, selectDisplayDuration, selectDisplayLyrics, selectDisplayPlayerState, selectDisplaySong, selectIsShowingTail, usePlaybackStore } from './stores/usePlaybackStore';
 import { useLibraryStore } from './stores/useLibraryStore';
 import { countRender } from './dev/renderCount';
@@ -140,14 +140,17 @@ import { useVisualizerTunings } from './components/visualizer/useVisualizerTunin
 import { usePlaybackRuntimeRefs } from './hooks/usePlaybackRuntimeRefs';
 import { useElectronWindowChrome } from './hooks/useElectronWindowChrome';
 import { useTransportCommandRefs } from './hooks/useTransportCommandRefs';
-import { handleAppleMusicSeek } from './hooks/useTransportDispatcher';
+import { handleExternalMediaSeek } from './hooks/useTransportDispatcher';
 import {
     useBackendAwarePlaybackActions,
     useBackendAwareTrackNavigation,
 } from './hooks/useBackendAwarePlaybackActions';
 import { usePlaybackSwitcherEntries } from './hooks/usePlaybackSwitcherEntries';
 import { useEffectivePlaybackModel } from './hooks/useEffectivePlayback';
-import { leaveAppleMusicForStage } from './hooks/usePlaybackBackendSwitch';
+import { useDisplayLyrics } from './hooks/useDisplayLyrics';
+import { useExternalMediaLyricsController } from './hooks/useExternalMediaLyricsController';
+import { useExternalMediaQueueAdvance } from './hooks/useExternalMediaQueueAdvance';
+import { leaveExternalMediaForStage } from './hooks/usePlaybackBackendSwitch';
 import { useHomeProviderRefresh } from './hooks/useHomeProviderRefresh';
 import { useAudioOutputDevice } from './hooks/useAudioOutputDevice';
 import { useThemeQuickEditorContext } from './hooks/useThemeQuickEditorContext';
@@ -365,7 +368,12 @@ export default function App() {
     // hook because every consumer must read the same snapshot — a hook would subscribe once per call
     // site and leave the later ones a frame behind. Idempotent, so a diagnostic surface calling it
     // too is harmless. While activeBackend is still 'folia' this only fills a store nobody gates on.
-    useEffect(() => startAppleMusicSmtcSubscription(), []);
+    useEffect(() => startExternalMediaSubscription(), []);
+
+    // Apple Music 歌词装载：曲目变化 → 跨 provider 匹配 → 走 Folia 同一条显示管线 → 入账到它自己的
+    // store。挂在这里而不是挂在某个视图里，是因为后端切换与切歌都可能在任意视图下发生，
+    // 而歌词一旦装载就必须在切到歌词界面时已经就位。
+    useExternalMediaLyricsController();
 
 
     // Navigation persistence state shared by the Grid home surfaces.
@@ -919,12 +927,12 @@ export default function App() {
      * flips `activePlaybackContext` to 'stage', and doing so while Apple Music still owned the
      * transport is exactly the state the invariant forbids.
      *
-     * `leaveAppleMusicForStage` is a no-op that sends no command when the backend is already Folia, so
+     * `leaveExternalMediaForStage` is a no-op that sends no command when the backend is already Folia, so
      * the ordinary Stage path is byte-for-byte unchanged. Nothing inside the Stage controller is
      * touched — the hand-over happens one level above it.
      */
     const openStagePlayerFromUi = useCallback(async () => {
-        leaveAppleMusicForStage();
+        leaveExternalMediaForStage();
         await openStagePlayer();
     }, [openStagePlayer]);
 
@@ -991,6 +999,7 @@ export default function App() {
         // originals; only the user-facing surfaces get the backend-aware wrappers.
         onPlayLocalSong: onPlayLocalSongRaw,
         onPlayNavidromeSong: onPlayNavidromeSongRaw,
+        onPlayExternalMediaSong: onPlayExternalMediaSongRaw,
         handleUpdateLocalLyrics,
         handleChangeLyricsSource,
         handleManualMatchOnline,
@@ -1118,6 +1127,7 @@ export default function App() {
         interruptStagePlaybackForMainTransition,
         onPlayLocalSong: onPlayLocalSongRaw,
         onPlayNavidromeSong: onPlayNavidromeSongRaw,
+        onPlayExternalMediaSong: onPlayExternalMediaSongRaw,
         onAddLocalSongToQueue: handleLocalQueueAdd,
         onAddNavidromeSongsToQueue: addNavidromeSongsToQueue,
         searchDeps: {
@@ -1159,6 +1169,9 @@ export default function App() {
         // the backend too. `claimFoliaBackend` is idempotent, so the wrapper being applied twice on
         // the paths that end in playSong costs one read and nothing else.
         handleSearchResultPlay: handleSearchResultPlayRaw,
+        // Reached through the ref for the same reason the platform switcher uses it: `pausePlayback`
+        // is declared further down, and this callback is only ever invoked from a click.
+        pauseFolia: pauseFoliaForAppleMusic,
     });
 
     const {
@@ -1168,6 +1181,11 @@ export default function App() {
         handlePrevTrack: handlePrevTrackRaw,
         handleNextTrack: handleNextTrackRaw,
     });
+
+    // 外部媒体后端的 queue 对账推进。`<audio>` 的 onEnded 在外部播放器下永不触发，
+    // 切歌信号只能来自观察层对账（分段权威，见 src/utils/externalMediaQueueAdvance.ts）。
+    // 用 handleNextTrackRaw 而不是 UI 包装版：这是自动推进路径，与 onEnded 同一语义。
+    useExternalMediaQueueAdvance({ advanceToNextTrack: handleNextTrackRaw });
     const handleSearchResultArtistOpen = useCallback(async (
         track: UnifiedSong,
         artistName: string,
@@ -1766,18 +1784,22 @@ export default function App() {
         hideTranslationSubtitle: shouldHidePlayerTranslationSubtitle,
         seed: visualizerGeometrySeed,
     });
+    // 后端感知的歌词：apple-music 时来自它自己的 store，其余情况就是 Folia 的 display 歌词。
+    // 发布面（Lyric API / 远程镜像）、AI 主题与调试快照都必须读这一份，而不是直读 usePlaybackStore ——
+    // 后者在 Apple Music 后端下会发布上一首 Folia 曲目的行。
+    const displayLyrics = useDisplayLyrics();
     const {
         lyricApiStatus,
         setLyricApiEnabled,
     } = useLyricApiPublisher({
         isElectronWindow,
-        lyrics,
+        lyrics: displayLyrics,
         offset: effectiveLyricTimelineOffsetMs,
     });
-    const canGenerateAITheme = Boolean((lyrics?.lines.length ?? 0) > 0 || currentSong?.isPureMusic);
+    const canGenerateAITheme = Boolean((displayLyrics?.lines.length ?? 0) > 0 || currentSong?.isPureMusic);
     const generateCurrentSongTheme = useCallback(() => {
-        void generateAITheme(lyrics, currentSong);
-    }, [currentSong, generateAITheme, lyrics]);
+        void generateAITheme(displayLyrics, currentSong);
+    }, [currentSong, generateAITheme, displayLyrics]);
     const toggleDaylightMode = useCallback(() => {
         handleToggleDaylight(!isDaylight);
     }, [handleToggleDaylight, isDaylight]);
@@ -1968,7 +1990,7 @@ export default function App() {
                 currentView,
                 playerState,
                 visualizerMode,
-                lyrics: lyrics,
+                lyrics: displayLyrics,
                 currentLineIndex,
                 currentTimeValue: currentTime.get(),
                 audioSrc,
@@ -1989,7 +2011,7 @@ export default function App() {
         isDevDebugOverlayVisible,
         nowPlayingDebugSnapshot,
         playerState,
-        lyrics,
+        displayLyrics,
         visualizerMode,
         bgMode,
         activeDualTheme,
@@ -2131,7 +2153,7 @@ export default function App() {
         // seconds. Placed before the transition branch on purpose: `seekDuringTransitionRef` and
         // `audioRef` both belong to Folia decks, and the Folia body below would also resume playback
         // — Apple Music's TryChangePlaybackPositionAsync deliberately does not.
-        if (handleAppleMusicSeek(time)) return;
+        if (handleExternalMediaSeek(time)) return;
 
         if (seekDuringTransitionRef.current(time)) {
             return;

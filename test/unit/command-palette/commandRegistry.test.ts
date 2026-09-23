@@ -150,6 +150,7 @@ const createContext = (overrides: CommandPaletteContextOverrides = {}): CommandP
             toggleAutomix: vi.fn(),
             setTransitionMode: vi.fn(),
             toggleTransitionPerformance: vi.fn(),
+            toggleBeatThisCpu: vi.fn(),
             canUseTransitionPerformance: vi.fn(() => true),
         },
         visualizer: {

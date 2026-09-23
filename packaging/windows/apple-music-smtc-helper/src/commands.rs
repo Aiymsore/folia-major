@@ -5,11 +5,12 @@
 // failing call) is covered by `cargo test` on any host OS, exactly like cli.rs/events.rs/watcher.rs.
 //
 // Two rules are load-bearing and must not be relaxed:
-//   * A command is addressed to the Apple Music session by its AUMID, on demand. There is no
-//     fallback to the OS "current session" and no fallback to any other player: if Apple Music is
+//   * A command is addressed to the matched media session (by default the Chrome tab playing
+//     music.apple.com) by its AUMID, on demand. There is no
+//     fallback to the OS "current session" and no fallback to any other player: if the target is
 //     not on the SMTC surface the command fails with `session-not-found` and nothing is touched.
-//     Verified behaviour on Windows 11 26200 is that Apple Music answers Try* calls even while it
-//     is not the current session, so "not current" must never be treated as "not targetable".
+//     Verified behaviour on Windows 11 26200 is that a media session answers Try* calls even while
+//     it is not the current session, so "not current" must never be treated as "not targetable".
 //   * stdout stays machine-readable JSONL. Nothing in this module prints; human-readable text goes
 //     to stderr in main.rs only.
 
@@ -19,7 +20,7 @@ use crate::events::{
     ERR_KIND_UNSUPPORTED_COMMAND,
 };
 
-/// Upper bound for a seek target: one hour. Apple Music's own tracks are far shorter, and the
+/// Upper bound for a seek target: one hour. Real tracks are far shorter, and the
 /// bound keeps a malformed or hostile request from being turned into an absurd tick count.
 pub const MAX_SEEK_MS: u64 = 3_600_000;
 
@@ -185,7 +186,7 @@ pub enum CommandOutcome {
 /// Implemented by `session::SessionTransport` (which targets the Apple Music session found by
 /// AUMID) and by fakes in the tests below.
 pub trait Transport {
-    /// Sends the command to the Apple Music session. `Err(reason)` means no Apple Music session
+    /// Sends the command to the matched media session. `Err(reason)` means no matching session
     /// could be addressed — never that another player was used instead.
     fn dispatch(&self, command: Command) -> Result<CommandOutcome, String>;
 
@@ -489,7 +490,7 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    const AUMID: &str = "AppleInc.AppleMusicWin_nzyj5cx40ttqa!App";
+    const AUMID: &str = "Chrome";
 
     /// Records what it was asked to do and replays a canned outcome, so the reply mapping is tested
     /// without WinRT.
@@ -698,10 +699,10 @@ mod tests {
 
     #[test]
     fn a_missing_session_names_no_target_and_never_falls_back() {
-        // The safety rule: when Apple Music is not on the SMTC surface the command reports
+        // The safety rule: when the target is not on the SMTC surface the command reports
         // session-not-found with no target, so a consumer can prove nothing else was controlled.
         let transport = FakeTransport::with_target(
-            Err("no Apple Music session is visible".to_string()),
+            Err("no matching media session is visible".to_string()),
             None,
         );
         let reply = execute(&request(r#"{"id":"c","command":"toggle"}"#), &transport, 5);
@@ -768,7 +769,7 @@ mod tests {
 
         let no_session = execute_argv(
             &options("next", None),
-            || Err("no session matching 'AppleMusicWin' is visible".to_string()),
+            || Err("no session matching 'Chrome' is visible".to_string()),
             11,
         );
         assert!(!no_session.ok);

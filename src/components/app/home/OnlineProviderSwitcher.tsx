@@ -82,15 +82,27 @@ const OnlineProviderSwitcher: React.FC<OnlineProviderSwitcherProps> = ({
     // rendered by its own branch below rather than through the provider row (which assumes an account,
     // a login state and a logout action). The trigger button's label/avatar follows whichever entry is
     // active, so the pill itself reflects "Apple Music" without any provider-side change.
-    const appleMusicEntry = switcherEntries?.find(entry => entry.kind === 'apple-music') ?? null;
+    //
+    // The status label is a six-state ladder, and each state names a DIFFERENT user action
+    // (install/connect the extension, open the web player, sign in, fix the storefront, or nothing).
+    // Collapsing them into one "unavailable" would tell the user nothing about what to do.
+    const appleMusicEntry = switcherEntries?.find(entry => entry.kind === 'external-media') ?? null;
     const isAppleMusicActive = appleMusicEntry?.isActive === true;
     const appleMusicStatusLabel = !appleMusicEntry
         ? ''
-        : appleMusicEntry.status === 'connected'
+        : appleMusicEntry.status === 'ready'
             ? t('appleMusic.connected')
-            : appleMusicEntry.status === 'not-running'
-                ? t('appleMusic.notRunning')
-                : t('appleMusic.unavailable');
+            : appleMusicEntry.status === 'extension-missing'
+                ? t('appleMusic.extensionMissing')
+                : appleMusicEntry.status === 'tab-not-found'
+                    ? t('appleMusic.tabNotFound')
+                    : appleMusicEntry.status === 'player-not-ready'
+                        ? t('appleMusic.playerNotReady')
+                        : appleMusicEntry.status === 'not-signed-in'
+                            ? t('appleMusic.notSignedIn')
+                            : appleMusicEntry.status === 'storefront-mismatch'
+                                ? t('appleMusic.storefrontMismatch')
+                                : t('appleMusic.unavailable');
 
     /**
      * 默认高度保留原 CSS（`bottom-4 md:bottom-6`），只有真的产生抬升量时才写内联 bottom。

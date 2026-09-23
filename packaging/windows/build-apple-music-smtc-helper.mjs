@@ -6,7 +6,7 @@
 // packages it as resources/folia-apple-music-smtc-helper.exe. Mirrors
 // packaging/windows/build-wallpaper-helper.mjs: shared by local `npm run build:electron*` and the
 // CI release workflow, and its output doubles as the dev-path override for
-// FOLIA_APPLE_MUSIC_SMTC_HELPER_PATH (see resolveAppleMusicSmtcHelperPath in electron/main.cjs).
+// FOLIA_APPLE_MUSIC_SMTC_HELPER_PATH (see resolveExternalMediaSmtcHelperPath in electron/main.cjs).
 // No-op on non-Windows hosts (the Linux/macOS build must not depend on a Rust Windows toolchain).
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';

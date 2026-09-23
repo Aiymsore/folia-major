@@ -89,3 +89,33 @@ __pycache__/
 
 # Built by build/buildPythonRuntime.mjs - binary artifacts that live on the mirrors, not in git.
 dist-runtime/
+
+# --- DSH (DeepSeek Harness) run traces -------------------------------------------------------
+# The harness writes per-project memory here as it works: session shards, watch state, and the
+# absolute paths of whatever machine it ran on. It is agent bookkeeping, not project source, and it
+# is machine-specific - a checkout must never inherit another machine's copy.
+#
+# `.dsh-project-memory/` was previously kept out by a LOCAL `.git/info/exclude` entry only, which
+# does not travel with the repository: a fresh clone on another machine had no rule at all and would
+# stage the whole directory. The rule belongs here.
+.dsh-project-memory/
+.dsh/
+.dsh-*/
+**/.dsh-project-memory/
+
+# Agent/editor tool state that some of these tools drop into a project root.
+# (`.agents/` and `.codex/` are already covered above; not repeated here.)
+.agent/
+.codex-*/
+.codebuff-ai/
+.openviking/
+.cursor/
+.aider*
+.claude/
+CLAUDE.local.md
+AGENTS.local.md
+
+# Local agent scratch and session dumps.
+*.session.json
+session-dump-*.json
+

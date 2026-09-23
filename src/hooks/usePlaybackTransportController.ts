@@ -6,7 +6,8 @@ import { setPlayerState } from '../stores/usePlaybackStore';
 import { useTranslation } from 'react-i18next';
 import { usePlaybackStore } from '../stores/usePlaybackStore';
 import { currentTime } from '../stores/motionSignals';
-import { handleAppleMusicAction } from './useTransportDispatcher';
+import { isExternalMediaPlaybackSong } from '../utils/appPlaybackGuards';
+import { claimExternalMediaBackend, handleExternalMediaAction, resumeExternalMediaSong } from './useTransportDispatcher';
 
 // src/hooks/usePlaybackTransportController.ts
 
@@ -65,13 +66,30 @@ export function usePlaybackTransportController({
     const activePlaybackContext = usePlaybackStore(state => state.activePlaybackContext);
     const audioSrc = usePlaybackStore(state => state.audioSrc);
     const duration = usePlaybackStore(state => state.duration);
+    // Read for the external-media branch below: pressing play on one of those tracks must not reach
+    // the Folia deck, which has no source for it at all.
+    const currentSong = usePlaybackStore(state => state.currentSong);
 
     const resumePlayback = useCallback(async () => {
-        // Phase 3A: an Apple Music backend owns the transport. `handleAppleMusicAction` returns true
+        // Phase 3A: an Apple Music backend owns the transport. `handleExternalMediaAction` returns true
         // when it has taken the call — either the command was sent, or this backend is active and
         // the command was deliberately dropped. Either way the Folia body below must not run: it
         // would start this element for a button the user aimed at Apple Music.
-        if (handleAppleMusicAction('play')) return;
+        if (handleExternalMediaAction('play')) return;
+
+        // The track ON SCREEN is an Apple Music one while the Folia backend still owns the transport:
+        // a restored session, or a provider switch after one was loaded. There is no source for it in
+        // this app, so the deck path below can only fail with an AbortError on an empty element. Hand
+        // it back to the external player instead, which is what "play" means for that track.
+        if (isExternalMediaPlaybackSong(currentSong)) {
+            const resumed = await resumeExternalMediaSong(currentSong);
+            if (!resumed) {
+                // Nothing is shown on success: the external player's own state push is what updates
+                // the transport, and a toast would be a second, later claim about the same fact.
+                setStatusMsg({ type: 'error', text: t('appleMusic.playRequestFailed') });
+            }
+            return;
+        }
 
         if (isNowPlayingStageActive) {
             return;
@@ -136,12 +154,20 @@ export function usePlaybackTransportController({
             setPlayerState(PlayerState.PAUSED);
             throw error;
         }
-    }, [activePlaybackContext, audioContextRef, audioRef, audioSrc, currentTime, duration, getSyntheticStageLyricsTime, getTargetPlaybackVolume, isNowPlayingStageActive, recoverOnlinePlaybackSource, setPlayerState, setStatusMsg, setupAudioAnalyzer, shouldRefreshCurrentOnlineAudioSource, stageActiveEntryKind, stageLyricsClockRef, syncOutputGain, syncStageLyricsClock, t]);
+    }, [activePlaybackContext, audioContextRef, audioRef, audioSrc, currentSong, currentTime, duration, getSyntheticStageLyricsTime, getTargetPlaybackVolume, isNowPlayingStageActive, recoverOnlinePlaybackSource, setPlayerState, setStatusMsg, setupAudioAnalyzer, shouldRefreshCurrentOnlineAudioSource, stageActiveEntryKind, stageLyricsClockRef, syncOutputGain, syncStageLyricsClock, t]);
 
     const pausePlayback = useCallback(() => {
         // Same contract as resumePlayback above: an Apple Music backend takes the pause, and the
         // Folia deck is left untouched.
-        if (handleAppleMusicAction('pause')) return;
+        if (handleExternalMediaAction('pause')) return;
+
+        // An Apple Music track with the Folia backend active (see resumePlayback): the deck is not
+        // what is sounding, so pausing it would be a no-op that leaves the web player playing.
+        if (isExternalMediaPlaybackSong(currentSong)) {
+            claimExternalMediaBackend();
+            handleExternalMediaAction('pause');
+            return;
+        }
 
         if (isNowPlayingStageActive) {
             return;
@@ -171,7 +197,7 @@ export function usePlaybackTransportController({
         audioRef.current.pause();
         syncOutputGain(getTargetPlaybackVolume(), 0);
         setPlayerState(PlayerState.PAUSED);
-    }, [activePlaybackContext, audioRef, audioSrc, currentTime, duration, getSyntheticStageLyricsTime, getTargetPlaybackVolume, isNowPlayingStageActive, pauseDuringTransition, setPlayerState, stageActiveEntryKind, stageLyricsClockRef, syncOutputGain, syncStageLyricsClock]);
+    }, [activePlaybackContext, audioRef, audioSrc, currentSong, currentTime, duration, getSyntheticStageLyricsTime, getTargetPlaybackVolume, isNowPlayingStageActive, pauseDuringTransition, setPlayerState, stageActiveEntryKind, stageLyricsClockRef, syncOutputGain, syncStageLyricsClock]);
 
     return {
         resumePlayback,

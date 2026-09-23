@@ -1,5 +1,6 @@
 import { syncNow } from '../../../services/sync/syncCoordinator';
 import { isSyncConfigured } from '../../../services/sync/syncConfig';
+import { toggleExternalMediaEnabled, useExternalMediaSettingsStore } from '../../../stores/useExternalMediaSettingsStore';
 import { buildObsCustomCss } from '../../../services/obs/obsCustomCss';
 import { hasUploadedObsAsset } from '../../../services/obs/visualSettingsConfig';
 import type { CommandPaletteCommand } from '../types';
@@ -92,6 +93,50 @@ export const settingsCommands: CommandPaletteCommand[] = [
     createSettingsAnchorCommand('settings-transition', 'Smart transition', 'Jump to the FOLIA transition settings', ['automix', 'crossfade', 'transition', '智能过渡', '转场'], 'transitionSettings'),
     createSettingsAnchorCommand('settings-local-lyrics-priority', 'Local song lyrics priority', 'Choose whether local songs prefer local or online lyrics', ['local lyrics priority', 'online lyrics first', 'local song lyrics', '本地歌曲歌词优先级', '在线优先', '本地歌词', 'bendigeciyouxianji', 'bdgcyxj'], 'lyrics'),
     createSettingsCommand('settings-integration', 'Integration settings', 'Open Stage, Now Playing, and Navidrome settings', ['integration', 'stage', 'now playing', 'navidrome settings', '集成', '连接'], 'options', 'integration'),
+    // 外部媒体后端（Chrome 里的 music.apple.com 全曲播放）。桌面限定：helper 进程与 loopback
+    // 桥都只存在于 Electron。
+    createSettingsCommand('settings-external-media', 'External media', 'Open the Apple Music web playback backend settings', ['apple music web', 'chrome extension', 'web playback', '外部媒体', '网页播放', '浏览器扩展'], 'options', 'externalMedia', { platform: ['electron'] }),
+    {
+        id: 'external-media-toggle',
+        platform: ['electron'],
+        group: 'settings',
+        title: 'External media backend',
+        description: 'Turn the Apple Music web playback backend on or off',
+        keywords: ['external media toggle', 'apple music web toggle', 'chrome extension backend', '外部媒体开关', '外部播放开关', '启用外部媒体', '关闭外部媒体'],
+        execute: async (_input, context) => {
+            const enabled = await toggleExternalMediaEnabled();
+            if (enabled === null) return false;
+            context.shared.setStatusMsg({
+                type: 'success',
+                text: enabled
+                    ? context.shared.t('options.externalMediaEnabledStatus', 'External media enabled')
+                    : context.shared.t('options.externalMediaDisabledStatus', 'External media disabled'),
+            });
+            return true;
+        },
+    },
+    {
+        id: 'external-media-regenerate-token',
+        platform: ['electron'],
+        group: 'settings',
+        title: 'Regenerate extension token',
+        description: 'Issue a new Folia Chrome extension token (drops the extension connection)',
+        keywords: ['regenerate token', 'extension token', 'rotate token', 'external media token', '重置令牌', '扩展令牌', '轮换令牌', '外部媒体令牌'],
+        execute: async (_input, context) => {
+            const bridge = window.electron;
+            if (typeof bridge?.externalMediaTokenRegenerate !== 'function') return false;
+            // 立即失效是这个动作的本意（旧令牌作废、扩展断连），所以与设置面板一样确认后才执行 ——
+            // 不给 executeShortcut 是同一理由：不可逆动作不许一键触发。
+            if (!window.confirm(context.shared.t('options.externalMediaRegenerateConfirm'))) return true;
+            const settings = await bridge.externalMediaTokenRegenerate();
+            useExternalMediaSettingsStore.setState({ settings });
+            context.shared.setStatusMsg({
+                type: 'info',
+                text: context.shared.t('options.externalMediaTokenRotated', 'New token issued. Paste it into the Folia Chrome extension to reconnect.'),
+            });
+            return true;
+        },
+    },
     createSettingsAnchorCommand('settings-navidrome', 'Navidrome server', 'Jump to the Navidrome server connection', ['navidrome', 'subsonic', 'music server', '音乐服务器'], 'navidrome'),
     createSettingsAnchorCommand('settings-stage-mode', 'Stage mode', 'Jump to the Stage external player settings', ['stage', 'external player', '舞台模式'], 'stageMode'),
     {
@@ -145,6 +190,18 @@ export const settingsCommands: CommandPaletteCommand[] = [
         keywords: ['performance mode', 'transition performance', 'aggressive transition', '表现模式', '过渡表现', '性能模式'],
         execute: (_input, context) => {
             context.settings.toggleTransitionPerformance();
+            return true;
+        },
+    },
+    {
+        id: 'transition-beat-cpu-toggle',
+        platform: ['electron'],
+        group: 'settings',
+        title: 'Beat grid on CPU',
+        description: 'Run beat detection on the processor so the graphics card stays free for games',
+        keywords: ['beat grid cpu', 'cpu beat', 'zero gpu', 'no gpu', 'gpu free', '节拍检测', '节拍用CPU', '不占显卡', '省显卡'],
+        execute: (_input, context) => {
+            context.settings.toggleBeatThisCpu();
             return true;
         },
     },

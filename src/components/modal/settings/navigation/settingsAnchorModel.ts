@@ -46,6 +46,10 @@ export const SETTINGS_ANCHOR_DEFINITIONS = {
     stageMode: { section: 'integration', labelKey: 'options.stageMode' },
     navidrome: { section: 'integration', labelKey: 'navidrome.settings' },
 
+    // ExternalMediaSettingsSubview
+    externalMedia: { section: 'externalMedia', labelKey: 'options.externalMediaSection', electronOnly: true },
+    externalMediaToken: { section: 'externalMedia', labelKey: 'options.externalMediaToken', electronOnly: true },
+
     // StorageSettingsSection (LocalLibraryWatchSection renders inside it)
     cacheDetails: { section: 'storage', labelKey: 'options.cacheDetails' },
     r2Sync: { section: 'storage', labelKey: 'options.r2Sync' },

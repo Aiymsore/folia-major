@@ -13,9 +13,9 @@ use crate::events::{Event, SessionSnapshot};
 /// What one poll of the platform returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PollOutcome {
-    /// An Apple Music session exists and was read.
+    /// The matched media session exists and was read.
     Snapshot(SessionSnapshot),
-    /// No Apple Music session is currently visible.
+    /// No matching media session is currently visible.
     NoSession,
 }
 
@@ -77,8 +77,8 @@ impl WatchState {
         }
 
         // Nothing changed. A NoSession is only ever emitted once per disappearance, so the
-        // heartbeat is also what keeps the consumer's "connected but idle" view fresh while Apple
-        // Music stays closed.
+        // heartbeat is also what keeps the consumer's "connected but idle" view fresh while the
+        // target app stays closed.
         if now_ms.saturating_sub(self.last_emitted_at_ms) >= self.heartbeat_ms {
             self.last_emitted_at_ms = now_ms;
             return Some(Event::Heartbeat);
@@ -94,7 +94,7 @@ mod tests {
 
     fn snapshot(title: &str, position_ms: u64) -> SessionSnapshot {
         SessionSnapshot {
-            source_app_user_model_id: "AppleInc.AppleMusicWin_nzyj5cx40ttqa!App".to_string(),
+            source_app_user_model_id: "Chrome".to_string(),
             title: Some(title.to_string()),
             artist: Some("artist".to_string()),
             album: None,
@@ -103,6 +103,7 @@ mod tests {
             duration_ms: Some(218000),
             has_thumbnail: true,
             updated_at_ms: 0,
+            last_updated_ms: None,
         }
     }
 
@@ -160,7 +161,7 @@ mod tests {
 
     #[test]
     fn no_session_before_any_session_is_silent() {
-        // Apple Music not running at startup is the common case; it must not emit a no-session
+        // The target not running at startup is the common case; it must not emit a no-session
         // the consumer never asked about, and no snapshot is synthesised for it either.
         let mut state = WatchState::new(HEARTBEAT);
         assert!(state.on_poll(PollOutcome::NoSession, 0).is_none());

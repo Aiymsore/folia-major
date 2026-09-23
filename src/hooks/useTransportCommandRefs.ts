@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { selectDisplayPlayerState, usePlaybackStore } from '../stores/usePlaybackStore';
-import { handleAppleMusicAction } from './useTransportDispatcher';
+import { handleExternalMediaAction } from './useTransportDispatcher';
 
 // src/hooks/useTransportCommandRefs.ts
 //
@@ -52,30 +52,33 @@ export const useTransportCommandRefs = ({
     useEffect(() => {
         mediaSessionPlayRef.current = () => {
             // Taken by Apple Music (sent, or deliberately dropped): the Folia handler must not run.
-            if (handleAppleMusicAction('play')) return Promise.resolve();
+            if (handleExternalMediaAction('play')) return Promise.resolve();
             return resumePlayback();
         };
     }, [resumePlayback]);
 
     useEffect(() => {
         mediaSessionPauseRef.current = () => {
-            if (handleAppleMusicAction('pause')) return;
+            if (handleExternalMediaAction('pause')) return;
             pausePlayback();
         };
     }, [pausePlayback]);
 
     useEffect(() => {
         mediaSessionPrevRef.current = () => {
-            if (handleAppleMusicAction('previous')) return;
+            // Deliberately NOT forwarded to the external player: "previous" means Folia's queue
+            // steps back, and the queue layer turns that into a playById of the previous track.
+            // Forwarding it would make Apple Music play its own internal queue instead.
             handlePrevTrack();
         };
     }, [handlePrevTrack]);
 
     useEffect(() => {
-        mediaSessionNextRef.current = (options?: never) => {
-            if (handleAppleMusicAction('next')) return Promise.resolve();
-            return handleNextTrack(options);
-        };
+        mediaSessionNextRef.current = (options?: never) => (
+            // Same as prev: Folia owns the queue, so "next" is resolved here rather than handed to
+            // the external player. See docs/external-media-backend.md, "命令面：绝不透传 next / previous".
+            handleNextTrack(options)
+        );
     }, [handleNextTrack]);
 
     useEffect(() => {

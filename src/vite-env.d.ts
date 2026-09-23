@@ -197,16 +197,27 @@ declare global {
   }
 
   /**
-   * Apple Music SMTC bridge status. Mirrors the status object assembled by
-   * electron/appleMusicSmtcBridge.cjs.
+   * External media bridge status. Mirrors the status object assembled by
+   * `electron/externalMediaSmtcBridge.cjs` (observation) and
+   * `electron/externalMediaBridge.cjs` (extension transport), merged into the single shape the
+   * renderer consumes.
    *
-   * `connected` describes the Apple Music session being visible, not the helper being alive —
-   * Apple Music simply not running is a normal state, reported with `connected: false` while
-   * `helperState` stays 'running'.
+   * Two independent liveness facts, and they must not be collapsed:
+   *   - `bridgeAvailable` / `helperState` describe Folia's own observation machinery (the Rust SMTC
+   *     helper). It being healthy says nothing about whether a browser is open.
+   *   - `extensionConnected` describes the Chrome extension's socket to Folia's loopback bridge.
+   *
+   * `connected` means a Chrome media session is visible through SMTC. Chrome not running, or no
+   * music.apple.com tab, is a normal state — reported as `connected: false` while `helperState`
+   * stays 'running'.
+   *
+   * The six-state availability ladder in `src/utils/externalMediaStatus.ts` is derived from these
+   * fields in a fixed order; each state maps to a different user action.
    */
-  interface ElectronAppleMusicSmtcStatus {
+  interface ElectronExternalMediaStatus {
     bridgeAvailable: boolean;
     helperState: 'stopped' | 'starting' | 'running' | 'missing';
+    /** A Chrome media session is visible through SMTC. */
     connected: boolean;
     sourceAppUserModelId: string | null;
     title: string | null;
@@ -218,51 +229,206 @@ declare global {
     hasThumbnail: boolean;
     /** Unix epoch ms when the helper captured this snapshot. Null when no session is loaded. */
     updatedAt: number | null;
+    /**
+     * Unix epoch ms when the *reported position* was established — the OS's own
+     * `TimelineProperties.LastUpdatedTime`, forwarded verbatim.
+     *
+     * Distinct from `updatedAt`, which is when the helper happened to read the session: this one
+     * says how old `positionMs` itself is. The OS quantizes the position to whole seconds and
+     * republishes the timeline about every 250 ms, so the stamp is what lets the clock measure a
+     * position's age instead of estimating it.
+     *
+     * Null when the timeline could not be read, or when no session is loaded.
+     */
+    lastUpdatedAt: number | null;
     /** Unix epoch ms of the last event received from the helper, of any kind. */
     lastEventAt: number | null;
     sessionCount: number | null;
     /**
-     * Outcome of the most recent transport command (Phase 2), or null when none was sent this run.
+     * The Chrome extension's socket to the loopback bridge is open. This is the first rung of the
+     * availability ladder: without it, `signedIn` / `storefrontMatches` are unknowable rather than
+     * false, and the UI must say "install/connect the extension" instead of guessing.
+     */
+    extensionConnected: boolean;
+    extensionVersion: string | null;
+    /** Capability names the extension declared in its `hello`. Empty when not connected. */
+    extensionCapabilities: string[];
+    /**
+     * Whether the EXTENSION reports the music.apple.com page as drivable (the observation frame's
+     * own `connected`).
+     *
+     * A third liveness fact, deliberately not folded into `connected` above: SMTC having no Chrome
+     * media session and a page whose player cannot be read are different problems with different
+     * user actions ("open the page" vs "reload that page"). `null` means the extension has not
+     * reported, or its report went stale — unknown, not unmet.
+     */
+    pageReady: boolean | null;
+    /**
+     * Page-level facts reported by the extension. `null` means "not known" (extension not
+     * connected, or it has not reported yet) — deliberately not `false`, because reporting
+     * "signed out" for an unknown state would send the user to a login page they are already on.
+     */
+    signedIn: boolean | null;
+    /**
+     * Page storefront matches the MusicKit storefront. A mismatch forces the web player to
+     * `previewOnly = true` regardless of DRM availability, which surfaces as "cannot play" with no
+     * visible cause — so it is its own state rather than folded into a generic failure.
+     */
+    storefrontMatches: boolean | null;
+    /**
+     * Outcome of the most recent transport command, or null when none was sent this run.
      * Held here rather than as a separate subscription so the diagnostic surface shows the result of
      * its own button press without a second channel.
      */
-    lastCommand: ElectronAppleMusicSmtcCommandResult | null;
+    lastCommand: ElectronExternalMediaCommandResult | null;
     lastError: { message: string; kind: string | null } | null;
+    /**
+     * The feature switch ("Settings → External media"). `false` means the bridges are not running
+     * at all (default): the availability ladder then reports `unavailable` and no helper process
+     * exists. Absent (older shapes, test fixtures) is treated as enabled.
+     */
+    enabled?: boolean;
     isStale?: boolean;
     snapshotStaleMs?: number;
   }
 
-  /** Transport commands the bridge will forward. Anything else is refused before it reaches Windows. */
-  type ElectronAppleMusicSmtcCommandName =
+  /** What the "Settings → External media" panel edits and displays. Mirrors main.cjs getExternalMediaSettings. */
+  interface ElectronExternalMediaSettings {
+    /** Feature switch. Default false: the four external prerequisites make this opt-in. */
+    enabled: boolean;
+    /** Loopback bridge port (HTTP + WebSocket), shown for extension pairing. */
+    port: number;
+    /** The bearer token the extension authenticates with, shown once for pairing. */
+    token: string | null;
+  }
+
+  /**
+   * Commands the bridge will forward.
+   *
+   * **There is deliberately no `next` / `previous`.** Folia owns the queue, so "next" is resolved
+   * by Folia into `playById(<the next queued track>)` rather than handed to the web player — which
+   * would otherwise play its own internal queue and fight Folia for control. Anything not listed
+   * here is refused before it reaches the extension.
+   */
+  type ElectronExternalMediaCommandName =
     | 'play'
     | 'pause'
-    | 'toggle-play-pause'
-    | 'previous'
-    | 'next'
-    | 'seek';
+    | 'toggle'
+    | 'seek'
+    | 'playById';
 
-  /** A command request. `positionMs` is required by 'seek' and rejected for every other command. */
-  interface ElectronAppleMusicSmtcCommandRequest {
-    command: ElectronAppleMusicSmtcCommandName;
+  /** A command request. `positionMs` is required by 'seek'; `mediaId` by 'playById'. */
+  interface ElectronExternalMediaCommandRequest {
+    command: ElectronExternalMediaCommandName;
     positionMs?: number;
+    mediaId?: string;
   }
 
   /**
    * Structured outcome of one command. `ok: false` is a normal result, not an exception: the
-   * command is a value with a machine-readable `errorKind` so the caller can tell "Apple Music is not
-   * running" (`session-not-found`) from "the OS declined" (`controller-declined`) from "the helper
-   * was gone" (`helper-unavailable` / `helper-exited` / `timeout`).
+   * command is a value with a machine-readable `errorKind` so the caller can tell "the extension is
+   * not connected" (`bridge-unavailable`) from "no music.apple.com tab" (`tab-not-found`) from
+   * "the page declined" (`player-declined`) from "the page is not signed in" (`not-signed-in`).
    *
-   * `targetAppUserModelId` is the session the command was addressed to, and is null whenever no
-   * Apple Music session was resolved — which is how a caller proves nothing else was controlled.
+   * `targetSourceId` names the media source the command was addressed to, and is null whenever no
+   * source was resolved — which is how a caller proves nothing else was controlled.
    */
-  interface ElectronAppleMusicSmtcCommandResult {
+  interface ElectronExternalMediaCommandResult {
     ok: boolean;
     command: string;
-    targetAppUserModelId: string | null;
+    targetSourceId: string | null;
     error: string | null;
     errorKind: string | null;
     completedAtMs: number | null;
+  }
+
+  /**
+   * Apple Music library/content source types. Mirrors electron/appleMusicLibraryBridge.cjs.
+   *
+   * These are deliberately NOT `UnifiedSong` / `OmniCollection`: Apple Music is a content source
+   * here, not a fourth Omni provider, so it must not be forced into the online identity contract
+   * (`sourceRef.providerId`) that Omni owns. The renderer adapts these into Folia's own shapes at
+   * the boundary, exactly like `navidromeService` does.
+   */
+  interface ElectronAppleMusicLibraryStatus {
+    signedIn: boolean;
+    storefront: string | null;
+  }
+
+  /** One song, from either the user's library or the public catalog. */
+  interface ElectronAppleMusicSong {
+    id: string;
+    type: 'song' | 'library-song';
+    title: string;
+    artist: string;
+    album: string;
+    albumId: string | null;
+    durationMs: number | null;
+    trackNumber: number | null;
+    discNumber: number | null;
+    isrc: string | null;
+    coverUrl?: string;
+    // 90 秒试听（`previews[].url` / `previewUrl`）已随试听路径一起删除：外部媒体后端只放
+    // 网页全曲，播放寻址走 `catalogId`（见 externalMediaQueueReconcile 的 resolveExternalMediaPlayableId）。
+    hasLyrics: boolean;
+    contentRating: string | null;
+    catalogId: string | null;
+    isLibrary: boolean;
+    url: string | null;
+  }
+
+  /** One playlist or album. `type` discriminates which one it is. */
+  interface ElectronAppleMusicCollection {
+    id: string;
+    type: 'playlist' | 'album';
+    name: string;
+    description: string;
+    curator: string;
+    trackCount: number | null;
+    coverUrl?: string;
+    canEdit?: boolean;
+    releaseDate?: string | null;
+    isLibrary: boolean;
+    url: string | null;
+  }
+
+  interface ElectronAppleMusicPage<T> {
+    items: T[];
+    hasMore: boolean;
+    nextOffset: number;
+    total?: number;
+  }
+
+  /**
+   * Result envelope for every library-bridge call. `ok: false` is a value, not a rejection, so the
+   * caller branches on `errorKind` instead of catching:
+   *   - `not-signed-in`    the user has not signed in, or Apple rejected the stored token
+   *   - `throttled`        Apple's shared web-player quota is exhausted (retry later, not now)
+   *   - `dev-token-unavailable` the scraped developer token could not be refreshed
+   *   - `network` / `upstream` transient failures
+   *   - `invalid-request`  a caller bug
+   */
+  type ElectronAppleMusicResult<T> =
+    | { ok: true } & T
+    | { ok: false; errorKind: string; message: string };
+
+  interface ElectronAppleMusicLibraryBridge {
+    appleMusicLibraryStatus: () => Promise<ElectronAppleMusicLibraryStatus>;
+    appleMusicLibraryRequest: (
+      operation:
+        | 'getLibraryPlaylists'
+        | 'getLibraryAlbums'
+        | 'getLibrarySongs'
+        | 'getLibraryPlaylistTracks'
+        | 'getLibraryAlbumTracks'
+        | 'getCatalogSongsByIds'
+        | 'getCatalogPlaylist'
+        | 'searchCatalog',
+      ...args: unknown[]
+    ) => Promise<unknown>;
+    appleMusicLibrarySignIn: () => Promise<{ ok: boolean; alreadyOpen?: boolean }>;
+    appleMusicLibrarySignOut: () => Promise<{ ok: boolean }>;
+    onAppleMusicLibraryStatusChanged: (callback: () => void) => () => void;
   }
 
   interface ElectronMainWindowClickThroughState {
@@ -729,6 +895,8 @@ declare global {
       onDebugMemorySample?: (callback: (sample: DebugMemorySample) => void) => () => void;
       /** One-way stage marks from the automix session into the runtime log. */
       diagMark?: (text: string) => void;
+      /** One-way push of the listener's beat_this-CPU switch to the analysis host. */
+      setAutomixBeatThisCpuOnly?: (value: boolean) => void;
       platform: string;
       isLinuxX11: boolean;
       getSettings: () => Promise<any>;
@@ -832,12 +1000,27 @@ declare global {
       publishDiscordPresenceSnapshot: (snapshot: ElectronDiscordPresenceSnapshot) => Promise<ElectronDiscordPresenceStatus>;
       // Apple Music bridge. Reading and starting are safe at any time; sending a command resolves
       // with a structured result for every outcome, including failures.
-      appleMusicGetState: () => Promise<ElectronAppleMusicSmtcStatus>;
-      appleMusicStart: () => Promise<ElectronAppleMusicSmtcStatus>;
-      appleMusicSendCommand: (
-        request: ElectronAppleMusicSmtcCommandRequest,
-      ) => Promise<ElectronAppleMusicSmtcCommandResult>;
-      onAppleMusicStateChanged: (callback: (status: ElectronAppleMusicSmtcStatus) => void) => () => void;
+      externalMediaGetState: () => Promise<ElectronExternalMediaStatus>;
+      externalMediaStart: () => Promise<ElectronExternalMediaStatus>;
+      externalMediaSendCommand: (
+        request: ElectronExternalMediaCommandRequest,
+      ) => Promise<ElectronExternalMediaCommandResult>;
+      // "Settings → External media": on/off switch (gates both bridges), loopback port, extension token.
+      externalMediaSettingsGet: () => Promise<ElectronExternalMediaSettings>;
+      externalMediaSettingsSet: (settings: { enabled: boolean }) => Promise<ElectronExternalMediaSettings>;
+      externalMediaTokenRegenerate: () => Promise<ElectronExternalMediaSettings>;
+      onExternalMediaStateChanged: (callback: (status: ElectronExternalMediaStatus) => void) => () => void;
+      // Apple Music library/content source. `appleMusicLibraryRequest` is a single allow-listed
+      // operation channel rather than one method per call, so adding a call does not require a new
+      // preload surface. Cast the result to `ElectronAppleMusicResult<...>` at the call site.
+      appleMusicLibraryStatus: () => Promise<ElectronAppleMusicLibraryStatus>;
+      appleMusicLibraryRequest: (
+        operation: Parameters<ElectronAppleMusicLibraryBridge['appleMusicLibraryRequest']>[0],
+        ...args: unknown[]
+      ) => Promise<unknown>;
+      appleMusicLibrarySignIn: () => Promise<{ ok: boolean; alreadyOpen?: boolean }>;
+      appleMusicLibrarySignOut: () => Promise<{ ok: boolean }>;
+      onAppleMusicLibraryStatusChanged: (callback: () => void) => () => void;
       getPlaybackSyncBridgeStatus: () => Promise<ElectronPlaybackSyncBridgeStatus>;
       getVoiceInputPauseStatus: () => Promise<ElectronVoiceInputPauseStatus>;
       onVoiceInputStateChanged: (callback: (state: ElectronVoiceInputPauseStatus) => void) => () => void;

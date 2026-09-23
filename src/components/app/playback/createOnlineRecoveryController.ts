@@ -4,6 +4,7 @@ import type { SongResult } from '../../../types';
 import type { AudioQualityPreference } from '../../../types/onlineMusic';
 import {
     getPlaybackSongKey,
+    isExternalMediaPlaybackSong,
     isLocalPlaybackSong,
     isNavidromePlaybackSong,
     isSamePlaybackSong,
@@ -72,7 +73,11 @@ export const createOnlineRecoveryController = ({
     onlineAudioUrlRefreshBufferMs,
 }: RecoveryControllerParams) => {
     const shouldRefreshCurrentOnlineAudioSource = () => {
-        if (!currentSong || isLocalPlaybackSong(currentSong) || isNavidromePlaybackSong(currentSong) || isStagePlaybackSong(currentSong)) {
+        // External media is excluded for the same reason local, Navidrome and Stage are: there is no
+        // Omni provider behind these tracks, so every "refresh" would ask a provider that does not
+        // own the song and raise `Song is not owned by an online provider`. The failure is not a
+        // stale URL - there is no URL at all; the external player owns the bytes.
+        if (!currentSong || isLocalPlaybackSong(currentSong) || isNavidromePlaybackSong(currentSong) || isStagePlaybackSong(currentSong) || isExternalMediaPlaybackSong(currentSong)) {
             return false;
         }
 
@@ -100,7 +105,11 @@ export const createOnlineRecoveryController = ({
         const song = currentSong;
         const audioElement = audioRef.current;
 
-        if (!song || !audioElement || isLocalPlaybackSong(song) || isNavidromePlaybackSong(song) || isStagePlaybackSong(song)) {
+        // The external-media guard here is load-bearing, not symmetry: this runs from the deck's own
+        // error path, and for an Apple Music track the deck has no source to load. Without it the
+        // recovery would fetch a stream for a song no provider owns (the `unsupported` throw) and
+        // then report a playback error over a track the web player may be playing perfectly well.
+        if (!song || !audioElement || isLocalPlaybackSong(song) || isNavidromePlaybackSong(song) || isStagePlaybackSong(song) || isExternalMediaPlaybackSong(song)) {
             return false;
         }
 

@@ -9,6 +9,8 @@ import { SongResult, LocalSong, LocalPlaylist, LocalLibraryGroup, Theme, PlayerS
 import { getNavidromeConfig, navidromeApi } from '../services/navidromeService';
 import LocalGrid3DView from './app/home/LocalGrid3DView';
 import NavidromeGrid3DView from './app/home/NavidromeGrid3DView';
+import AppleMusicGrid3DView from './app/home/AppleMusicGrid3DView';
+import { isAppleMusicLibraryAvailable } from '../services/appleMusicService';
 import DesktopGrid3DSurface from './folia-grid/DesktopGrid3DSurface';
 import {
     createOnlineGridViewCollection,
@@ -16,7 +18,7 @@ import {
 } from './app/home/gridViewCollectionAdapters';
 import { importFolder, resyncAllFolders, LOCAL_MUSIC_SCAN_PROGRESS_EVENT } from '../services/localMusicService';
 import { getLocalLibraryAvailability } from '../services/localLibraryAvailability';
-import { importLocalPlaylistFile } from '../services/localPlaylistFileService';
+import { buildPlaylistImportStatusMessage, importPlaylistFile } from '../services/portablePlaylistFileService';
 import { useOnlineProviderQrLogin } from '../hooks/useOnlineProviderQrLogin';
 import type { OnlineProviderPlatformState } from '../hooks/useOnlineProviderPlatform';
 import type { PlaybackSwitcherEntries } from '../hooks/usePlaybackSwitcherEntries';
@@ -182,6 +184,8 @@ export const Grid3D: React.FC<Grid3DProps> = (props) => {
     })));
 
     const isOnlineTab = homeViewTab === 'playlist' || homeViewTab === 'albums' || homeViewTab === 'radio';
+    // Probed once per render; it is a synchronous capability check, not a request.
+    const appleMusicLibraryAvailable = isAppleMusicLibraryAvailable();
     const activeProviderId = onlineProviderPlatform?.activeProviderId || 'netease';
     const activeProviderSummary = onlineProviderPlatform?.activeProvider;
     const activeProviderCapabilities = omni.getProviderCapabilities(activeProviderId);
@@ -593,27 +597,12 @@ export const Grid3D: React.FC<Grid3DProps> = (props) => {
 
         setIsLocalPlaylistImporting(true);
         try {
-            const result = await importLocalPlaylistFile(file, localSongs);
-            if (!result.playlist) {
-                onStatusMessage?.({ type: 'error', text: t('localMusic.playlistImportNoMatches') });
-                return;
+            // 统一导入入口：m3u/m3u8 按路径匹配本地曲库，json 走便携歌单（跨来源条目）。
+            const result = await importPlaylistFile(file, localSongs);
+            if (result.playlist) {
+                await onRefreshLocalSongs();
             }
-
-            await onRefreshLocalSongs();
-            const skippedCount = result.unmatchedPaths.length + result.ambiguousPaths.length;
-            onStatusMessage?.({
-                type: skippedCount > 0 ? 'info' : 'success',
-                text: skippedCount > 0
-                    ? t('localMusic.playlistImportPartial', {
-                        name: result.playlist.name,
-                        count: result.matchedSongIds.length,
-                        skipped: skippedCount,
-                    })
-                    : t('localMusic.playlistImportSuccess', {
-                        name: result.playlist.name,
-                        count: result.matchedSongIds.length,
-                    }),
-            });
+            onStatusMessage?.(buildPlaylistImportStatusMessage(result, t));
         } catch (error) {
             console.error('[Grid3D] Failed to import local playlist:', error);
             onStatusMessage?.({ type: 'error', text: t('localMusic.playlistImportFailed') });
@@ -770,6 +759,11 @@ export const Grid3D: React.FC<Grid3DProps> = (props) => {
                                                 : 'localMusic.importNotSupported'),
                                     }] : []),
                                     ...(navidromeEnabled ? [{ key: 'navidrome', label: t('navidrome.title') || 'Navidrome', disabledReason: undefined }] : []),
+                                    // Apple Music is a content source of its own, not an Omni
+                                    // provider, so it gets its own tab rather than joining the
+                                    // provider switcher. Shown whenever this build can reach the
+                                    // library bridge at all.
+                                    ...(appleMusicLibraryAvailable ? [{ key: 'appleMusic', label: t('appleMusic.title'), disabledReason: undefined }] : []),
                                 ].map((tab) => {
                                     const isActive = homeViewTab === tab.key;
                                     return (
@@ -938,6 +932,18 @@ export const Grid3D: React.FC<Grid3DProps> = (props) => {
                             onPlayAll={onPlayAll}
                             onAddAllToQueue={onAddAllToQueue}
                             onRefreshLocalSongs={onRefreshLocalSongs}
+                        />
+                    </div>
+                ) : homeViewTab === 'appleMusic' ? (
+                    <div className="w-full h-full flex-1">
+                        <AppleMusicGrid3DView
+                            theme={theme}
+                            isDaylight={isDaylight}
+                            isInteractive={isInteractive}
+                            focusedAlbumIndex={navidromeFocusedAlbumIndex}
+                            setFocusedAlbumIndex={setNavidromeFocusedAlbumIndex ?? (() => { })}
+                            hasFloatingPlayer={Boolean(currentTrack)}
+                            onOpenGridView={onOpenGridView}
                         />
                     </div>
                 ) : (

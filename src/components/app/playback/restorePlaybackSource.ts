@@ -14,12 +14,18 @@ import type { NavidromeSong } from '../../../types/navidrome';
 import { hydrateNavidromeLyricPayload, resolvePreferredNavidromeLyrics } from '../../../utils/appNavidromeLyrics';
 import { hasRenderableLyrics } from '../../../utils/appPlaybackHelpers';
 import {
+    isExternalMediaPlaybackSong,
     isLocalPlaybackSong,
     isNavidromePlaybackSong,
     isSamePlaybackSong,
     replacePlaybackSongInQueue,
 } from '../../../utils/appPlaybackGuards';
+import { resolveAppleMusicLyrics } from '../../../services/appleMusicService';
 import { getLocalCoverAssetUrl } from '../../../services/localCoverAssetUrl';
+// `LyricParserFactory` used to be imported here and is gone: upstream removed its last use in this
+// file, and our side only ever carried the import over. `resolveExternalMediaPlayableId` is ours —
+// the external-media restore path needs it to decide whether a remembered track is still playable.
+import { resolveExternalMediaPlayableId } from '../../../utils/externalMediaQueueReconcile';
 import { isPureMusicLyricText } from '../../../utils/lyrics/pureMusic';
 import { migrateLyricDataRenderHints } from '../../../utils/lyrics/renderHints';
 import { resolveLocalSongLyrics } from '../../../utils/lyrics/localSongLyrics';
@@ -202,6 +208,31 @@ export const restorePlaybackSourceForSong = async (
         }
         const restoredQueue = replacePlaybackSongInQueue(queue || [restoredSong], restoredSong);
         void persistLastPlaybackCache?.(restoredSong, restoredQueue);
+        return true;
+    }
+
+    // An Apple Music track restored from the last session: Folia has no audio for it and never will
+    // (see `onPlayExternalMediaSong`), so the online path below would ask Omni for a stream of a song
+    // no provider owns. What a restore CAN do is put the track back on screen with its cached cover
+    // and lyrics - which is what the branch above already did - and leave the transport alone.
+    //
+    // Deliberately no `playById` here: restoring a session must not start playback by itself (the
+    // autoplay intent is a separate switch), and the external player may well still be on this track.
+    if (isExternalMediaPlaybackSong(song)) {
+        currentOnlineAudioUrlFetchedAtRef.current = null;
+        setCurrentSong(song);
+        const restoredQueue = queue && queue.length > 0 ? queue : [song];
+        void persistLastPlaybackCache?.(song, restoredQueue);
+        // Lyrics still come from AMLL's TTML database, keyed by the catalog id.
+        const restoredLyrics = await resolveAppleMusicLyrics(song);
+        if (restoredLyrics) {
+            setLyrics(restoredLyrics);
+        }
+        if (!resolveExternalMediaPlayableId(song)) {
+            // A library upload with no catalog entry cannot be addressed at all; say so instead of
+            // leaving a silent track on screen. Same message the click path uses.
+            setStatusMsg({ type: 'info', text: i18n.t('appleMusic.noCatalogEntry') });
+        }
         return true;
     }
 

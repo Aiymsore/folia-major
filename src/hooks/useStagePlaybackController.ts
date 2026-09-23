@@ -106,6 +106,9 @@ export function useStagePlaybackController({
     const playerCapSticky = useStageSettingsStore(state => state.playerCapSticky);
     const activePlaybackContext = usePlaybackStore(state => state.activePlaybackContext);
     const currentSong = usePlaybackStore(state => state.currentSong);
+    // 刻意直读 raw：Stage 有自己的播放快照语义（playerCapState / 外部控制端镜像），它整份
+    // 描述的是 Folia 的播放状态，本轮不参与 Apple Music backend。混入统一歌词入口会让快照
+    // 一半是 Stage、一半是 Apple Music。
     const lyrics = usePlaybackStore(state => state.lyrics);
     const cachedCoverUrl = usePlaybackStore(state => state.cachedCoverUrl);
     const audioSrc = usePlaybackStore(state => state.audioSrc);

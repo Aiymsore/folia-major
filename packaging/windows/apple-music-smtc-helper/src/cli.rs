@@ -1,5 +1,6 @@
 // packaging/windows/apple-music-smtc-helper/src/cli.rs
-// Pure command-line parsing for the Apple Music SMTC reader. No WinRT imports, so the unit tests
+// Pure command-line parsing for the external-media SMTC reader (the media session matched by
+// `--match`, by default the Chrome tab playing music.apple.com). No WinRT imports, so the unit tests
 // at the bottom of this file run on any host OS (see `cargo test`) — the Windows-only code path
 // lives in session.rs and main.rs and is cfg-gated to Windows.
 //
@@ -12,22 +13,34 @@
 //                 same reasoning applies to a command that must act on the live timeline.
 
 /// Default poll interval. Apple Music republishes its timeline roughly every 280 ms but quantizes
-/// the position to whole seconds, so 500 ms catches every position change while leaving the
-/// process idle over half the time.
-pub const DEFAULT_INTERVAL_MS: u64 = 500;
+/// the position to whole seconds, so 250 ms samples every republish while leaving the process idle
+/// most of the time.
+///
+/// Why not the previous 500 ms: at 500 ms the helper skipped about half of the OS's republishes, so
+/// the `lastUpdatedMs` stamp it forwards was up to ~750 ms old instead of ~250 ms. The position
+/// value itself cannot get finer than whole seconds regardless (that is Apple Music's quantization,
+/// not our polling rate), but a fresher stamp is what lets the renderer measure — rather than
+/// estimate — how stale a position is.
+pub const DEFAULT_INTERVAL_MS: u64 = 250;
 
 /// Default heartbeat. Must stay comfortably above the interval so a healthy stream is mostly
 /// change-driven; its only job is to prove the loop is still running when nothing changes.
 pub const DEFAULT_HEARTBEAT_MS: u64 = 3000;
 
-/// Substring matched against each session's AUMID to decide which one is Apple Music.
+/// Substring matched against each session's AUMID to decide which session is the target media
+/// source.
 ///
-/// The Microsoft Store package reports `AppleInc.AppleMusicWin_nzyj5cx40ttqa!App`. Matching on
-/// `AppleMusicWin` rather than the full AUMID keeps working if the package family hash changes
-/// (it is derived from the publisher identity), while still excluding other Apple publishers such
-/// as iCloud and the Devices app. `--match` exists so a future iTunes build or a renamed package
-/// can be targeted without a rebuild.
-pub const DEFAULT_MATCH: &str = "AppleMusicWin";
+/// Since the external-media backend targets music.apple.com **in Chrome** (the web player is the
+/// only place full tracks can play), the default is `Chrome`. Matching is case-insensitive
+/// substring, so this covers `Chrome`, `Chrome Beta`, `Chrome_<hash>`-style AUMIDs and even a bare
+/// `chrome.exe` — while excluding Edge (`MSEdge`) and every other player. `--match` (and Folia's
+/// `FOLIA_EXTERNAL_MEDIA_SMTC_MATCH` override) exists so another channel or browser can be targeted
+/// without a rebuild.
+///
+/// The desktop Apple Music app (`AppleInc.AppleMusicWin_nzyj5cx40ttqa!App`) is deliberately NOT a
+/// default or a fallback: its SMTC session cannot play a track by id, so nothing in Folia addresses
+/// it any more.
+pub const DEFAULT_MATCH: &str = "Chrome";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchOptions {
@@ -316,12 +329,12 @@ mod tests {
     fn parses_match_and_heartbeat_and_once() {
         let options = watch(&[
             "watch",
-            "--match=AppleInc.AppleMusicWin",
+            "--match=Chrome",
             "--heartbeat",
             "1000",
             "--once",
         ]);
-        assert_eq!(options.match_substring, "AppleInc.AppleMusicWin");
+        assert_eq!(options.match_substring, "Chrome");
         assert_eq!(options.heartbeat_ms, 1000);
         assert!(options.once);
     }

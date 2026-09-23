@@ -32,14 +32,14 @@ const ref = <T,>(value: T) => ({ current: value });
 const streamUrl = (vkey: string) =>
     `http://isure.stream.qqmusic.qq.com/M800004Th6td4LaoZs004Th6td4LaoZs.mp3?guid=${vkey}&vkey=${vkey}&uin=1&fromtag=8`;
 
-const createController = (audioSrc: string) => {
+const createController = (audioSrc: string, songOverride?: SongResult) => {
     const lastAudioRecoverySourceRef = ref<string | null>(null);
     const audioRef = ref<HTMLAudioElement | null>({ currentTime: 0, currentSrc: audioSrc } as HTMLAudioElement);
     const setAudioSrc = vi.fn();
 
     const controller = createOnlineRecoveryController({
         audioQuality: 'high',
-        currentSong: song,
+        currentSong: songOverride ?? song,
         audioSrc,
         audioRef,
         currentSongRef: ref<string | number | null>(getPlaybackSongKey(song)),
@@ -100,5 +100,27 @@ describe('online playback recovery bounds', () => {
         await expect(controller.recoverOnlinePlaybackSource({ failedSrc: streamUrl('two'), autoplay: true }))
             .resolves.toBe(true);
         expect(loadAudioSourceMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('never asks a provider about an Apple Music track the deck cannot load', async () => {
+        // The deck has no source for these tracks at all (the web player owns the bytes), so the
+        // error path that leads here is expected - and asking Omni about it raises
+        // `Song is not owned by an online provider`, which is what the screenshot showed.
+        const appleMusicSong: SongResult = {
+            id: 'apple-music:a.1538098094',
+            name: '你',
+            artists: [],
+            album: { id: 0, name: 'Album' },
+            durationMs: 1000,
+            sourceRef: { kind: 'external-media', mediaId: 'a.1538098094' },
+            externalMediaId: 'a.1538098094',
+            externalMediaCatalogId: '1538098094',
+        } as SongResult;
+
+        const { controller } = createController('', appleMusicSong);
+
+        await expect(controller.recoverOnlinePlaybackSource({ failedSrc: null, autoplay: true }))
+            .resolves.toBe(false);
+        expect(loadAudioSourceMock).not.toHaveBeenCalled();
     });
 });

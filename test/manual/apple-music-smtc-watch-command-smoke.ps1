@@ -1,7 +1,7 @@
 # test/manual/apple-music-smtc-watch-command-smoke.ps1
 #
 # Live stdin/stdout check of the helper's Phase 2 command channel, without touching Apple Music: it
-# starts `watch` exactly the way electron/appleMusicSmtcBridge.cjs does, sends one JSON command
+# starts `watch` exactly the way electron/externalMediaSmtcBridge.cjs does, sends one JSON command
 # request whose --match cannot resolve to any session, and asserts that a single `response` event
 # comes back with the request's id and `session-not-found`.
 #

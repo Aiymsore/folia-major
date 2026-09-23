@@ -1,4 +1,4 @@
-import { Command, Database, FlaskConical, Keyboard, Languages, PlayCircle, Server, Sparkles, Terminal, type LucideIcon } from 'lucide-react';
+import { Cast, Command, Database, FlaskConical, Keyboard, Languages, PlayCircle, Server, Sparkles, Terminal, type LucideIcon } from 'lucide-react';
 import { SETTINGS_ANCHOR_DEFINITIONS, type SettingsAnchorId } from './settingsAnchorModel';
 // src/components/modal/settings/navigation/settingsNavModel.ts
 // Single source of truth for the options-tab sections: sidebar order, grouping, titles and descriptions.
@@ -9,6 +9,7 @@ export type SettingsSectionId =
     | 'playback'
     | 'interaction'
     | 'integration'
+    | 'externalMedia'
     | 'storage'
     | 'desktop'
     | 'lab'
@@ -78,6 +79,9 @@ export const SETTINGS_NAV_GROUP_SPECS: GroupSpec[] = [
         labelKey: 'options.settingsGroupConnections',
         sections: [
             { id: 'integration', icon: Server, labelKey: 'options.integrationSettings', descriptionKey: 'options.integrationSettingsDesc' },
+            // Desktop-only like `desktop` itself: the backend needs the SMTC helper and the loopback
+            // bridge, neither of which exists on web.
+            { id: 'externalMedia', icon: Cast, labelKey: 'options.externalMediaSettings', descriptionKey: 'options.externalMediaSettingsDesc', electronOnly: true },
             { id: 'storage', icon: Database, labelKey: 'options.storageSettings', descriptionKey: 'options.storageSettingsPanelDesc' },
         ],
     },

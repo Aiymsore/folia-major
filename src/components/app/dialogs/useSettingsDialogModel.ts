@@ -14,6 +14,7 @@ import { buildSettingsDialogModel, type SettingsDialogDeps } from './buildSettin
 export const useSettingsDialogModel = (deps: SettingsDialogDeps) => {
     const state = useSettingsModalStore(modal => modal.settingsModalState);
     const currentSongTitle = usePlaybackStore(playback => playback.currentSong?.name ?? null);
+    // 刻意直读 raw：设置面板的「当前歌词」档位以 Folia 的 currentSong 为身份，两者必须同源。
     const currentLyrics = usePlaybackStore(playback => playback.lyrics);
     const activePlaybackContext = usePlaybackStore(playback => playback.activePlaybackContext);
     const replayGainMode = usePlaybackStore(playback => playback.replayGainMode);

@@ -69,8 +69,9 @@ describe('computeModDigest', () => {
         for (let index = 0; index <= DIGEST_LIMITS.maxFiles; index += 1) {
             files[`file-${index}.txt`] = String(index);
         }
+        // 这条要真写上千个文件再整体散列，单跑就接近 6s：全量并行时放宽墙钟上限，判据不变。
         expect(computeModDigest(makeModDirectory(files))).toBeNull();
-    });
+    }, 30000);
 });
 
 describe('shortDigest', () => {

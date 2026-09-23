@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('electron', {
     getAutomixModelsPresent: () => ipcRenderer.invoke('automix-models-present'),
     // One-way stage marks from the automix session into the runtime log. See services/automix/diag.ts.
     diagMark: (text) => ipcRenderer.send('automix-diag', text),
+    // One-way push of the listener's beat_this-CPU switch; the analysis host restarts its worker.
+    setAutomixBeatThisCpuOnly: (value) => ipcRenderer.send('automix-beat-this-cpu-only', Boolean(value)),
     // Developer debug module: the runtime log and the memory monitor. See electron/debug/debugHost.cjs.
     debugGetState: () => ipcRenderer.invoke('debug-get-state'),
     debugSetState: (patch) => ipcRenderer.invoke('debug-set-state', patch),
@@ -189,18 +191,42 @@ contextBridge.exposeInMainWorld('electron', {
     },
     getDiscordPresenceStatus: () => ipcRenderer.invoke('discord-presence-get-status'),
     publishDiscordPresenceSnapshot: (snapshot) => ipcRenderer.invoke('discord-presence-publish-snapshot', snapshot),
-    // Apple Music bridge. appleMusicGetState is safe to poll; appleMusicStart only exists so a
+    // External media bridge. externalMediaGetState is safe to poll; externalMediaStart only exists so a
     // diagnostic surface can force the helper up without waiting for the first read.
-    // appleMusicSendCommand (Phase 2) resolves with a structured result for every outcome — success,
-    // a declined transport call, a missing Apple Music session, or a bridge-local failure — so the
-    // renderer never has to tell a rejected IPC call apart from a real one.
-    appleMusicGetState: () => ipcRenderer.invoke('apple-music-smtc-get-status'),
-    appleMusicStart: () => ipcRenderer.invoke('apple-music-smtc-start'),
-    appleMusicSendCommand: (request) => ipcRenderer.invoke('apple-music-smtc-command', request),
-    onAppleMusicStateChanged: (callback) => {
+    //
+    // externalMediaSendCommand resolves with a structured result for every outcome — success, a
+    // declined command, a disconnected extension, or a bridge-local failure — so the renderer never
+    // has to tell a rejected IPC call apart from a real one.
+    //
+    // The accepted command set is play / pause / toggle / seek / playById. There is deliberately no
+    // next / previous: Folia owns the queue, so those are resolved by the queue layer into a
+    // playById of the target track rather than handed to the external player, which would otherwise
+    // advance its own internal queue. The bridge refuses anything else before it reaches the wire.
+    externalMediaGetState: () => ipcRenderer.invoke('external-media-smtc-get-status'),
+    externalMediaStart: () => ipcRenderer.invoke('external-media-smtc-start'),
+    externalMediaSendCommand: (request) => ipcRenderer.invoke('external-media-smtc-command', request),
+    // "Settings → External media": the on/off switch (which gates both bridges), the loopback port,
+    // and the extension token. Regenerating the token drops the extension's connection on purpose.
+    externalMediaSettingsGet: () => ipcRenderer.invoke('external-media-settings-get'),
+    externalMediaSettingsSet: (settings) => ipcRenderer.invoke('external-media-settings-set', settings),
+    externalMediaTokenRegenerate: () => ipcRenderer.invoke('external-media-token-regenerate'),
+    onExternalMediaStateChanged: (callback) => {
       const listener = (_event, status) => callback(status);
-      ipcRenderer.on('apple-music-smtc-status-changed', listener);
-      return () => ipcRenderer.removeListener('apple-music-smtc-status-changed', listener);
+      ipcRenderer.on('external-media-smtc-status-changed', listener);
+      return () => ipcRenderer.removeListener('external-media-smtc-status-changed', listener);
+    },
+    // Apple Music library/content source. Distinct from the SMTC surface above: that one controls
+    // playback of the external app, this one reads the user's library through Apple's web API.
+    // `request` is an operation name plus positional args; the main process allow-lists operations
+    // so a compromised renderer cannot reach an arbitrary bridge method.
+    appleMusicLibraryStatus: () => ipcRenderer.invoke('apple-music-library-status'),
+    appleMusicLibraryRequest: (operation, ...args) => ipcRenderer.invoke('apple-music-library-request', { operation, args }),
+    appleMusicLibrarySignIn: () => ipcRenderer.invoke('apple-music-library-sign-in'),
+    appleMusicLibrarySignOut: () => ipcRenderer.invoke('apple-music-library-sign-out'),
+    onAppleMusicLibraryStatusChanged: (callback) => {
+      const listener = () => callback();
+      ipcRenderer.on('apple-music-library-status-changed', listener);
+      return () => ipcRenderer.removeListener('apple-music-library-status-changed', listener);
     },
     getPlaybackSyncBridgeStatus: () => ipcRenderer.invoke('playback-sync-bridge-get-status'),
     getVoiceInputPauseStatus: () => ipcRenderer.invoke('voice-input-pause-get-status'),

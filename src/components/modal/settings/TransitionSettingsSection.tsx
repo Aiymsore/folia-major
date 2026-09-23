@@ -62,12 +62,14 @@ const TransitionSettingsSection: React.FC<TransitionSettingsSectionProps> = ({
         transitionPerformance,
         transitionAnimation,
         transitionAnimationCard,
+        beatThisCpuOnly,
         onToggleAutomix,
         onSetTransitionMode,
         onSetCrossfadeMaxSec,
         onToggleTransitionPerformance,
         onToggleTransitionAnimation,
         onToggleTransitionAnimationCard,
+        onToggleBeatThisCpu,
     } = useAutomixSettingsStore(useShallow(state => ({
         automixEnabled: state.automixEnabled,
         transitionMode: state.transitionMode,
@@ -75,12 +77,14 @@ const TransitionSettingsSection: React.FC<TransitionSettingsSectionProps> = ({
         transitionPerformance: state.transitionPerformance,
         transitionAnimation: state.transitionAnimation,
         transitionAnimationCard: state.transitionAnimationCard,
+        beatThisCpuOnly: state.beatThisCpuOnly,
         onToggleAutomix: state.handleToggleAutomix,
         onSetTransitionMode: state.handleSetTransitionMode,
         onSetCrossfadeMaxSec: state.handleSetCrossfadeMaxSec,
         onToggleTransitionPerformance: state.handleToggleTransitionPerformance,
         onToggleTransitionAnimation: state.handleToggleTransitionAnimation,
         onToggleTransitionAnimationCard: state.handleToggleTransitionAnimationCard,
+        onToggleBeatThisCpu: state.handleToggleBeatThisCpu,
     })));
 
     const [animationOpen, setAnimationOpen] = React.useState(false);
@@ -439,6 +443,31 @@ const TransitionSettingsSection: React.FC<TransitionSettingsSectionProps> = ({
                         Inside one branch, the only way to download the weights vanished for anyone
                         on the other mode. Kept in this section though, not a category of its own,
                         because it belongs to Folia transitions. */}
+                    {capabilities.desktop && (
+                        <div
+                            className="flex items-start justify-between gap-4 border-t px-3 py-3"
+                            style={{ borderColor: isDaylight ? 'rgba(24, 24, 27, 0.12)' : 'rgba(255, 255, 255, 0.1)' }}
+                        >
+                            <div className="min-w-0">
+                                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                                    {t('options.transitionBeatThisCpu')}
+                                </div>
+                                <div className="mt-1 text-[11px] leading-relaxed opacity-60 max-w-[420px]" style={{ color: 'var(--text-secondary)' }}>
+                                    {t('options.transitionBeatThisCpuDesc')}
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => onToggleBeatThisCpu(!beatThisCpuOnly)}
+                                className={`w-12 h-6 rounded-full p-1 transition-colors shrink-0 ${beatThisCpuOnly ? '' : toggleOffBackgroundClass}`}
+                                style={{ backgroundColor: beatThisCpuOnly ? theme?.secondaryColor || 'rgba(114, 119, 134, 1)' : undefined }}
+                                aria-pressed={beatThisCpuOnly}
+                                aria-label={t('options.transitionBeatThisCpu')}
+                            >
+                                <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${beatThisCpuOnly ? 'translate-x-6' : 'translate-x-0'}`} />
+                            </button>
+                        </div>
+                    )}
                     {capabilities.desktop && <AutomixModelsSection isDaylight={isDaylight} />}
                 </div>
             </div>

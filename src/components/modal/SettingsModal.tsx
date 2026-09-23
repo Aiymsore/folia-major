@@ -18,6 +18,7 @@ import AppearanceSettingsSubview from './settings/AppearanceSettingsSubview';
 import DesktopSettingsSubview from './settings/DesktopSettingsSubview';
 import GeneralSettingsSubview from './settings/GeneralSettingsSubview';
 import IntegrationSettingsSubview from './settings/IntegrationSettingsSubview';
+import ExternalMediaSettingsSubview from './settings/ExternalMediaSettingsSubview';
 import type { PlayerCapConnectionStatus } from '../../types/playerCap';
 import LabSettingsModal from './settings/LabSettingsModal';
 import DeveloperSettingsSubview from './settings/DeveloperSettingsSubview';
@@ -421,6 +422,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             initialSubview === 'playback' ||
             initialSubview === 'interaction' ||
             initialSubview === 'integration' ||
+            initialSubview === 'externalMedia' ||
             initialSubview === 'storage' ||
             initialSubview === 'desktop' ||
             initialSubview === 'lab' ||
@@ -1763,6 +1765,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                                     stageAddressCopied,
                                                     stageSource,
                                                     stageStatus,
+                                                }}
+                                            />
+                                        )}
+                                        {activeSettingsSection === 'externalMedia' && (
+                                            <ExternalMediaSettingsSubview
+                                                chrome={{
+                                                    errorBgColor,
+                                                    errorTextColor,
+                                                    getAccentOptionStyle,
+                                                    isElectron,
+                                                    settingsCardClass,
+                                                    successBgColor,
+                                                    successTextColor,
+                                                    theme,
+                                                    toggleOffBackgroundClass,
                                                 }}
                                             />
                                         )}

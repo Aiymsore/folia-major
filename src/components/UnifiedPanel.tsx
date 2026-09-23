@@ -16,7 +16,8 @@ import OnlineLyricsTab from './panelTab/OnlineLyricsTab';
 import type { OnlineLyricsState } from '../types';
 import type { AudioQualityPreference } from '../types/onlineMusic';
 import type { ThemeSourceModel } from '../hooks/themeControllerState';
-import { getPlaybackSourceRef, getPlaybackSongSource, hasMixedPlaybackSources } from '../utils/appPlaybackGuards';
+import { getPlaybackSourceRef } from '../utils/appPlaybackGuards';
+import { canPersistPlaylistEntry } from '../utils/playlistEntry';
 import { resolveLikeAvailability } from '../utils/playerLikeAvailability';
 import { usePlayerBottomBarBottomPx } from '../hooks/usePlayerBottomBarBottomPx';
 import { getSizedCoverUrl } from '../utils/coverUrl';
@@ -864,12 +865,11 @@ const UnifiedPanel: React.FC<UnifiedPanelProps> = ({
                                                 onMoveSongToEnd={onMoveSongToEnd}
                                                 onMoveSongToNext={onMoveSongToNext}
                                                 onOpenLattice={queue.onOpenLattice}
-                                                // TODO: Define cross-source playlist export before enabling playlist creation for mixed queues.
+                                                // 跨来源歌单已定义（LocalPlaylist.entries）：队列里只要有可回放条目就能保存，
+                                                // 不可回放的条目在保存时剔除。
                                                 canSaveLocalPlaylist={Boolean(
-                                                    isLocal
-                                                    && !hasMixedPlaybackSources(playQueue)
-                                                    && playQueue.length > 0
-                                                    && playQueue.every(song => getPlaybackSongSource(song) === 'local')
+                                                    playQueue.length > 0
+                                                    && playQueue.some(song => canPersistPlaylistEntry(song))
                                                 )}
                                                 onSaveCurrentQueueAsPlaylist={onSaveCurrentQueueAsPlaylist}
                                                 isDaylight={isDaylight}

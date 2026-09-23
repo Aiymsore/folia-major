@@ -77,6 +77,10 @@ export interface GridViewSourceActions {
         onDeletePlaylist?: (playlistId: string) => Promise<void> | void;
         onExportPlaylist?: (playlistId: string) => Promise<void> | void;
         onRemovePlaylistSongs?: (playlistId: string, songIds: string[]) => Promise<void> | void;
+        /** 跨来源歌单（entries）的删除入口；键为 `getPlaybackSongKey` 同命名空间的条目键。 */
+        onRemovePlaylistEntries?: (playlistId: string, entryKeys: string[]) => Promise<void> | void;
+        /** 歌单文件导入（m3u/m3u8/json），命令面板与隐藏文件输入共用。 */
+        onImportPlaylistFile?: (file: File) => Promise<void> | void;
         onEditEntity?: (entityId: string) => Promise<void> | void;
         onOrganizeFolderSongInfo?: (collection: any) => Promise<void> | void;
         onMatchSong?: (songId: string) => Promise<void> | void;
@@ -719,6 +723,20 @@ export const GridView: React.FC<GridViewProps> = ({
         }
     }, [collection, sourceActions]);
 
+    // 命令面板的「导入歌单」入口：与首页隐藏文件输入同一后端（m3u/m3u8/json 都收）。
+    const handleImportPlaylistFile = useCallback(() => {
+        if (!sourceActions?.local?.onImportPlaylistFile) return;
+
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.m3u,.m3u8,.json,application/json,audio/x-mpegurl,application/vnd.apple.mpegurl';
+        input.onchange = () => {
+            const file = input.files?.[0];
+            if (file) void sourceActions.local?.onImportPlaylistFile?.(file);
+        };
+        input.click();
+    }, [sourceActions]);
+
     const handleAddNavidromeCollectionToPlaylist = useCallback(async (playlistId: string | number) => {
         await sourceActions?.navidrome?.onAddToPlaylist?.(playlistId, playableTracks);
     }, [playableTracks, sourceActions]);
@@ -1122,6 +1140,19 @@ export const GridView: React.FC<GridViewProps> = ({
             }
 
             if (isLocalPlaylistCollection && collection.playlistId && sourceActions?.local?.onRemovePlaylistSongs) {
+                const isEntriesPlaylist = Array.isArray(collection.entries) && collection.entries.length > 0;
+                if (isEntriesPlaylist) {
+                    // 跨来源歌单按条目键删；没有条目删除入口时不动数据（不能按 songIds 误删本地子集）。
+                    if (sourceActions.local.onRemovePlaylistEntries) {
+                        await sourceActions.local.onRemovePlaylistEntries(collection.playlistId, [getPlaybackSongKey(track)]);
+                        commitAfterTrackRemovalAnimation(trackKey, () => {
+                            const playbackKey = getPlaybackSongKey(track);
+                            setRemovedExternalTrackKeys(prev => new Set(prev).add(playbackKey).add(`${playbackKey}-${trackIndex}`));
+                            void sourceActions.local?.onRefresh?.();
+                        });
+                    }
+                    return;
+                }
                 const localSongId = (track as UnifiedSong).localRef?.songId || String(track.id);
                 await sourceActions.local.onRemovePlaylistSongs(collection.playlistId, [localSongId]);
                 commitAfterTrackRemovalAnimation(trackKey, () => {
@@ -1918,6 +1949,7 @@ export const GridView: React.FC<GridViewProps> = ({
             && collection?.type === 'playlist'
             && Boolean(collection.playlistId)
             && Boolean(sourceActions?.local?.onExportPlaylist),
+        canImportPlaylist: isLocalCollection && Boolean(sourceActions?.local?.onImportPlaylistFile),
         canEditEntity: isLocalEntityCollection && Boolean(sourceActions?.local?.onEditEntity),
         canEditPlaylist,
         isSourceActionPending,
@@ -1940,6 +1972,7 @@ export const GridView: React.FC<GridViewProps> = ({
         resyncAllFolders: () => void handleResyncAllLocalFolders(),
         organizeSongInfo: () => { if (collection) void sourceActions?.local?.onOrganizeFolderSongInfo?.(collection); },
         exportPlaylist: () => void handleExportLocalPlaylist(),
+        importPlaylist: () => handleImportPlaylistFile(),
         editEntity: () => { if (collection?.entityId) void sourceActions?.local?.onEditEntity?.(String(collection.entityId)); },
         toggleEditMode: handleEditModeToggle,
     };

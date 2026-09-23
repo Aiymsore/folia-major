@@ -1,7 +1,8 @@
 import { useLatticeControlsStore } from '../stores/useLatticeControlsStore';
 import { useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { selectDisplayLyrics, selectDisplayPlayerState, usePlaybackStore } from '../stores/usePlaybackStore';
+import { selectDisplayPlayerState, usePlaybackStore } from '../stores/usePlaybackStore';
+import { useDisplayLyrics } from './useDisplayLyrics';
 import { useSearchNavigationStore } from '../stores/useSearchNavigationStore';
 import { setIsPanelOpen, setPanelTab, useAppViewStore } from '../stores/useAppViewStore';
 import { useGridSurfaceStore } from '../stores/useGridSurfaceStore';
@@ -76,7 +77,8 @@ export const useCommandPaletteContext = (
     const setHomeViewTab = useSearchNavigationStore(state => state.setHomeViewTab);
     // What is on screen, transitions included: surfaces that publish lyrics (the mod runtime
     // snapshot) must send the rendered ones, not a guess rebuilt from the song's stored state.
-    const lyrics = usePlaybackStore(selectDisplayLyrics);
+    // 走统一入口：Apple Music 后端下这一份就是它自己的歌词，而不是上一首 Folia 曲目的行。
+    const lyrics = useDisplayLyrics();
     // The transport the listener can hear, like the main controls, the remote and the taskbar.
     // The raw state goes IDLE for the length of an arm while the outgoing deck is still playing,
     // and the palette read that as "paused": its Play command called toggle, which during a blend

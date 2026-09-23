@@ -284,6 +284,8 @@ export type CommandPaletteSettingsContext = {
     toggleAutomix: () => void;
     setTransitionMode: (mode: TransitionMode) => void;
     toggleTransitionPerformance: () => void;
+    /** beat_this 跑 CPU（零显卡占用）的开关；只在桌面构建可用。 */
+    toggleBeatThisCpu: () => void;
     /**
      * Whether performance mode has anything to run on - the same `capabilities.stems` the settings
      * panel disables its switch by.

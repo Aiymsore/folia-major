@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { createRequire } from 'module';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// test/unit/electron/appleMusicSmtcBridge.test.ts
+// test/unit/electron/externalMediaSmtcBridge.test.ts
 // Locks down the Apple Music SMTC bridge: JSONL parsing, the status/payload mapping, the
 // "no session is not a failure" rule, the silence watchdog, respawn-on-exit, and (Phase 2) the
 // outbound command channel — id correlation, timeouts, and refusing to queue a command for a helper
@@ -15,15 +15,15 @@ const {
   COMMAND_TIMEOUT_MS,
   parseHelperEventLine,
   validateCommandRequest,
-  emptyAppleMusicSmtcStatus,
-  createAppleMusicSmtcBridge,
-} = require('../../../electron/appleMusicSmtcBridge.cjs') as {
+  emptyExternalMediaStatus,
+  createExternalMediaSmtcBridge,
+} = require('../../../electron/externalMediaSmtcBridge.cjs') as {
   HELPER_HEARTBEAT_TIMEOUT_MS: number;
   COMMAND_TIMEOUT_MS: number;
   parseHelperEventLine: (line: unknown) => BridgeEvent | null;
   validateCommandRequest: (raw: unknown) => { request?: CommandRequest; error?: string };
-  emptyAppleMusicSmtcStatus: () => BridgeStatus;
-  createAppleMusicSmtcBridge: (options: BridgeOptions) => Bridge;
+  emptyExternalMediaStatus: () => BridgeStatus;
+  createExternalMediaSmtcBridge: (options: BridgeOptions) => Bridge;
 };
 
 interface BridgeEvent {
@@ -130,7 +130,7 @@ function responseLine(overrides: Record<string, unknown> = {}): string {
     id: 'c1',
     command: 'play',
     ok: true,
-    targetAppUserModelId: 'AppleInc.AppleMusicWin_nzyj5cx40ttqa!App',
+    targetAppUserModelId: 'Chrome',
     error: null,
     errorKind: null,
     completedAtMs: 1789471213330,
@@ -177,7 +177,7 @@ function createTimerHarness() {
 function snapshotLine(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     event: 'snapshot',
-    sourceAppUserModelId: 'AppleInc.AppleMusicWin_nzyj5cx40ttqa!App',
+    sourceAppUserModelId: 'Chrome',
     title: 'MaringCode',
     artist: '神楽 めあ',
     album: null,
@@ -201,9 +201,9 @@ describe('parseHelperEventLine', () => {
   });
 });
 
-describe('emptyAppleMusicSmtcStatus', () => {
+describe('emptyExternalMediaStatus', () => {
   it('describes an unavailable bridge without claiming a disconnected session', () => {
-    const status = emptyAppleMusicSmtcStatus();
+    const status = emptyExternalMediaStatus();
     expect(status.bridgeAvailable).toBe(false);
     expect(status.helperState).toBe('stopped');
     expect(status.connected).toBe(false);
@@ -211,13 +211,13 @@ describe('emptyAppleMusicSmtcStatus', () => {
   });
 });
 
-describe('createAppleMusicSmtcBridge', () => {
+describe('createExternalMediaSmtcBridge', () => {
   let timers: ReturnType<typeof createTimerHarness>;
   let child: FakeChild;
   let now: number;
 
   function createBridge(overrides: Partial<BridgeOptions> = {}) {
-    return createAppleMusicSmtcBridge({
+    return createExternalMediaSmtcBridge({
       spawnFn: () => {
         child = createFakeChild();
         return child;
@@ -278,7 +278,7 @@ describe('createAppleMusicSmtcBridge', () => {
     const status = bridge.getStatus();
     expect(status.helperState).toBe('running');
     expect(status.connected).toBe(true);
-    expect(status.sourceAppUserModelId).toBe('AppleInc.AppleMusicWin_nzyj5cx40ttqa!App');
+    expect(status.sourceAppUserModelId).toBe('Chrome');
     expect(status.title).toBe('MaringCode');
     expect(status.artist).toBe('神楽 めあ');
     expect(status.playbackStatus).toBe('Playing');
@@ -477,7 +477,7 @@ describe('sendCommand', () => {
   let now: number;
 
   function createBridge(overrides: Partial<BridgeOptions> = {}) {
-    return createAppleMusicSmtcBridge({
+    return createExternalMediaSmtcBridge({
       spawnFn: () => {
         child = createFakeChild();
         return child;
@@ -519,7 +519,7 @@ describe('sendCommand', () => {
     await expect(pendingResult).resolves.toEqual({
       ok: true,
       command: 'play',
-      targetAppUserModelId: 'AppleInc.AppleMusicWin_nzyj5cx40ttqa!App',
+      targetAppUserModelId: 'Chrome',
       error: null,
       errorKind: null,
       completedAtMs: 1789471213330,

@@ -26,7 +26,23 @@ export type PlaybackSourceRef =
     }
     | { kind: 'local'; mediaId: string }
     | { kind: 'navidrome'; mediaId: string }
-    | { kind: 'stage'; mediaId: string };
+    | { kind: 'stage'; mediaId: string }
+    /**
+     * A track that Folia does not play itself: it is played by an external media backend
+     * (music.apple.com in Chrome, driven through the extension) while Folia owns the queue.
+     *
+     * A distinct kind rather than an `online` ref with a `providerId`, because there is no Omni
+     * adapter to fetch audio from, and giving it a provider id would make `omni` claim ownership of
+     * a song it cannot resolve. It is also not `local` — the bytes come from Apple's CDN and are
+     * decoded inside the browser, and `local` means "a file on this machine" everywhere else.
+     *
+     * This replaces the former `apple-music` kind, which meant "a ~90 second preview played in
+     * Folia's own <audio> element". That distinction was load-bearing and had to go: the preview
+     * path put the bytes in Folia's deck, so `playQueue` advanced off `<audio>.onEnded`, whereas an
+     * external backend has no such element and its queue advance comes from observation instead
+     * (see `src/utils/externalMediaQueueReconcile.ts`).
+     */
+    | { kind: 'external-media'; mediaId: string };
 
 export interface ProviderCapabilities {
     search: boolean;

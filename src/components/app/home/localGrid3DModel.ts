@@ -198,10 +198,12 @@ export const buildLocalGrid3DGroups = (
             type: 'playlist' as const,
             name: playlist.name,
             songs: playlistSongs,
+            // 跨来源歌单以 entries 为准（songIds 只是本地子集），卡片计数不能漏掉非本地条目。
+            ...(playlist.entries?.length ? { entries: playlist.entries } : {}),
             coverUrl: getLocalCoverUrl(playlistSongs),
             id: `playlist-${playlist.id}`,
             playlistId: playlist.id,
-            trackCount: playlistSongs.length,
+            trackCount: playlist.entries?.length ?? playlistSongs.length,
             description: playlist.isFavorite ? t('localMusic.favoritePlaylist') : t('home.playlists'),
             isVirtual: playlist.isFavorite,
         };

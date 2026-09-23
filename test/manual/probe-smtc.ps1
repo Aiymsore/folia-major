@@ -1,14 +1,14 @@
 param(
-    # Substring match against SourceAppUserModelId. The Microsoft Store Apple Music package reports
-    # the exact AUMID `AppleInc.AppleMusicWin_nzyj5cx40ttqa!App`; `AppleMusicWin` still matches it if
-    # the package family hash changes, while excluding other Apple publishers (iCloud, Devices).
-    [string]$Match = 'AppleMusicWin',
+    # Substring match against SourceAppUserModelId. The default targets the Chrome tab playing
+    # music.apple.com (the external-media backend's media source); `Chrome` matches any Chrome
+    # channel AUMID spelling while excluding Edge and other players.
+    [string]$Match = 'Chrome',
     [string[]]$Command = @('TogglePlayPause', 'SkipNext'),
     [switch]$DryRun,
     [switch]$Once,
     # Fails (exit 3) unless the matched target is NOT the current media session. The whole point of
     # the non-current experiment is that the session being driven is not the one the OS has focused;
-    # without this guard a run where Apple Music happened to be current would silently prove nothing.
+    # without this guard a run where the target happened to be current would silently prove nothing.
     [switch]$RequireNonCurrent,
     [ValidateRange(100, 60000)]
     [int]$IntervalMs = 1000,
@@ -19,7 +19,7 @@ param(
 # test/manual/probe-smtc.ps1
 #
 # Standalone Windows SMTC read + control verification. This script exists ONLY to answer one
-# question against a real player (Apple Music): can a plain desktop process enumerate
+# question against a real player (the Chrome tab playing music.apple.com): can a plain desktop process enumerate
 # GlobalSystemMediaTransportControlsSession objects owned by OTHER applications, read their
 # metadata/timeline, and drive them with TryTogglePlayPauseAsync / TrySkipNextAsync?
 #
@@ -281,7 +281,7 @@ do {
             Start-Sleep -Milliseconds $IntervalMs
             continue
         }
-        Write-Output 'Nothing to control. Start playback in Apple Music and re-run.'
+        Write-Output 'Nothing to control. Start playback in the matched player and re-run.'
         exit 2
     }
 

@@ -11,19 +11,29 @@ is the check that a rebuild produced the file that was listened to:
 
     python build/htdemucs_halve_segment.py htdemucs-7.8s.onnx models/htdemucs.onnx
 
-The half length is 172032 (3.902s), not 171990, because the chain has to stay integral:
+Which half it cuts is decided by the graph itself (the declared time length), so the same
+command applied to the already-cut 3.9s model cuts it again (172032 -> 86016, 1.95s) -
+the 挂账 8b candidate. Two explicit tables, never a computed guess: a wrong constant here
+does not crash, it produces garbage audio, so what cleared the first cut was a blind A/B
+on four rendered transitions, and the second cut is delivered as a candidate pending the
+same treatment.
+
+The half length stays integral:
 
     343980 -> 85995 -> 21499 -> 5375 -> 1344     three Pad(+1) needed to round up
     172032 -> 43008 -> 10752 -> 2688 ->  672     divides cleanly, the pads go to zero
+    86016 -> 21504 ->  5376 -> 1344 ->  336     divides cleanly again
 
     STFT: 343980 + 1536 + 1620 = 347136 -> (347136-4096)/1024+1 = 336 frames
           172032 + 1536 + 1536 = 175104 -> (175104-4096)/1024+1 = 168 frames
+           86016 + 1536 + 1536 =  89088 -> ( 89088-4096)/1024+1 =  84 frames
 
 Left pad is always hop//2*3 = 1536; the right pad is that plus ceil(len/hop)*hop - len,
 which is 84 for the original and 0 for a length that is already a multiple of the hop.
 
-A wrong constant here does not crash, it produces garbage audio, so what cleared this was
-a blind A/B on four rendered transitions, not the shape checker at the bottom.
+Every derived value follows formulas fixed by the first cut (frames F = L/1024 when L is
+hop-aligned, fold counts F+{0,2,4,5,6,7}, token counts 8*F / 8*(F+4) / 2*(F+4), decoder
+trims L'+2 at each of the first four chain levels), spelled out as literal tables anyway.
 """
 import sys
 import numpy as np
@@ -32,28 +42,9 @@ from onnx import numpy_helper
 
 SRC, DST = sys.argv[1], sys.argv[2]
 
-# old -> new, every integer constant in the graph that is a length along time. Substitution is
-# simultaneous, so the pairs that swap into each other (5375 -> 2688 while 2688 -> 1344) are fine.
-#
-#   time chain      343980   85995   21499   5375   1344      the encoder/decoder lengths
-#   tdecoder trims  343982   85997   21501   5377             Slice[2 : L+2] after each ConvTranspose
-#   STFT lengths    345516 = L+1536, 347136 = L+1536+1620, then +2048/+4096 for the reflect pad
-#   frames          336, and 338/340/341/342/343 for the istft fold                  (336 -> 168)
-#   token counts    2688 = 8 freq bins x 336 frames, 680 = 2ch x 340, 2720 = 8 x 340
-#
-# 384/512/768/1024/1536/2048/2049/4096 are NOT here on purpose: channels, FFN width, qkv width,
-# hop, nfft and the freq bin count do not scale with the segment.
-SHAPES = {
-    343980: 172032, 343982: 172034, 345516: 173568, 347136: 175104,
-    349184: 177152, 351232: 179200,
-     85995:  43008,  85997:  43010,
-     21499:  10752,  21501:  10754,
-      5375:   2688,   5377:   2690,
-      2720:   1376,   2688:   1344,
-      1344:    672,    680:    344,
-       343:    175,    342:    174,    341:    173,    340:    172,
-       338:    170,    336:    168,
-}
+# The iSTFT's window-sum normaliser, and the STFT hop it is built on. Same names every cut.
+WINDOW_SUM = '/real_istft/Cast_output_0'
+HOP = 1024
 
 # Position-indexed sinusoidal tables, folded to constants at export, one per Add that puts an
 # embedding on a sequence. Slicing is the right operation on them: position k's vector is
@@ -65,24 +56,76 @@ SHAPES = {
 # the first 1344 therefore keeps 168 whole frames. Freq-major would have kept four bins of the
 # whole window instead, which is not a thing that would have crashed.
 TABLES = {
-    '/Mul_5_output_0': 3,                          # [1, 48, 512, 336] frames axis
-    '/crosstransformer/Reshape_4_output_0': 1,     # [1, 2688, 512]    168 frames x 8 bins
-    '/crosstransformer/Transpose_7_output_0': 1,   # [1, 1344, 512]    time steps
+    '/Mul_5_output_0': 3,                          # [1, 48, 512, frames] frames axis
+    '/crosstransformer/Reshape_4_output_0': 1,     # [1, 8*frames, 512]  frames x 8 bins
+    '/crosstransformer/Transpose_7_output_0': 1,   # [1, 4*frames, 512]  time steps
 }
 
-# The iSTFT's window-sum normaliser, and the STFT hop it is built on.
-WINDOW_SUM = '/real_istft/Cast_output_0'
-HOP = 1024
-
+# The pads that exist only to make a length divisible (all zero once the chain divides).
 PADS = {
     '/Pad': [0, 0, 1536, 0, 0, 1536],          # STFT: right pad 1620 -> 1536, see above
-    '/tencoder.1/Pad': [0] * 6,                 # no longer needed: 43008 % 4 == 0
+    '/tencoder.1/Pad': [0] * 6,
     '/tencoder.2/Pad': [0] * 6,
     '/tencoder.3/Pad': [0] * 6,
 }
 
+# old -> new, every integer constant in the graph that is a length along time. Substitution is
+# simultaneous, so the pairs that swap into each other (5375 -> 2688 while 2688 -> 1344) are fine.
+#
+#   time chain      the encoder/decoder lengths, L/4/16/64/256 rounded up per level
+#   tdecoder trims  L'+2 at the first four levels: Slice[2 : L+2] after each ConvTranspose
+#   STFT lengths    L+1536, L+3072, then +2048/+4096 for the reflect pad
+#   frames          F and the iSTFT fold counts F+{0,2,4,5,6,7}
+#   token counts    8*F crosstransformer tokens, 2*(F+4) and 8*(F+4) for the folds
+#
+# 384/512/768/1024/1536/2048/2049/4096 are NOT here on purpose: channels, FFN width, qkv width,
+# hop, nfft and the freq bin count do not scale with the segment.
+CUTS = {
+    # 343980 (7.8s) -> 172032 (3.902s): the cut MODELS.md documents and the manifest ships.
+    343980: {
+        'shapes': {
+            343980: 172032, 343982: 172034, 345516: 173568, 347136: 175104,
+            349184: 177152, 351232: 179200,
+             85995:  43008,  85997:  43010,
+             21499:  10752,  21501:  10754,
+              5375:   2688,   5377:   2690,
+              2720:   1376,   2688:   1344,
+              1344:    672,    680:    344,
+               343:    175,    342:    174,    341:    173,    340:    172,
+               338:    170,    336:    168,
+        },
+        # Where the window-sum splice's head piece ends, in hops. Any whole number of hops past
+        # the 3-hop ramp-up and 3 hops clear of the tail works; 86 of the 171 sits mid-constant.
+        'head_hops': 86,
+    },
+    # 172032 (3.9s) -> 86016 (1.95s): the 挂账 8b candidate cut, delivered for blind A/B.
+    172032: {
+        'shapes': {
+            172032:  86016, 172034:  86018, 173568:  87552, 175104:  89088,
+            177152:  91136, 179200:  93184,
+             43008:  21504,  43010:  21506,
+             10752:   5376,  10754:   5378,
+              2688:   1344,   2690:   1346,
+              1376:    704,   1344:    672,
+               672:    336,    344:    176,
+               175:     91,    174:     90,    173:     89,    172:     88,
+               170:     86,    168:     84,
+        },
+        # 43 of the 87 hops of 89088: past the ramp-up, 44 hops clear of the tail.
+        'head_hops': 43,
+    },
+}
+
 model = onnx.load(SRC)
 graph = model.graph
+
+# Which cut this graph wants, read from its declared interface - never guessed from argv.
+declared = {dim.dim_value for io in graph.input for dim in io.type.tensor_type.shape.dim if dim.dim_value}
+cut_from = next((src for src in CUTS if src in declared), None)
+if cut_from is None:
+    sys.exit(f'no known segment length declared in {SRC}; known: {sorted(CUTS)}')
+SHAPES = CUTS[cut_from]['shapes']
+
 by_name = {i.name: i for i in graph.initializer}
 counts = {'shape': 0, 'table': 0, 'pad': 0}
 
@@ -115,7 +158,7 @@ for name, axis in TABLES.items():
 init = by_name[WINDOW_SUM]
 a = numpy_helper.to_array(init)
 new_len = SHAPES[a.shape[0]]
-head = 86 * HOP
+head = CUTS[cut_from]['head_hops'] * HOP
 spliced = np.concatenate([a[:head], a[a.shape[0] - (new_len - head):]])
 assert spliced.shape[0] == new_len and np.ptp(spliced) == np.ptp(a)
 init.CopyFrom(numpy_helper.from_array(spliced, WINDOW_SUM))
@@ -139,5 +182,6 @@ onnx.checker.check_model(model)
 onnx.save(model, DST)
 
 assert counts['pad'] == len(PADS), f"only patched {counts['pad']} of {len(PADS)} pads"
-print(f"{counts['shape']} shape constants, {counts['table']} position tables, {counts['pad']} pads")
+print(f"{cut_from} -> {SHAPES[cut_from]}: "
+      f"{counts['shape']} shape constants, {counts['table']} position tables, {counts['pad']} pads")
 print(f"-> {DST}")
