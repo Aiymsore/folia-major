@@ -418,11 +418,26 @@ export async function autoMatchBestLyric(
     // 为一个最终可能被逐字结果取代的候选提前付这笔开销不值得。
     let lineLevelFallback: (() => Promise<AutoMatchBestLyricMatch>) | null = null;
 
+    /**
+     * 记住一个行级兜底候选。**第一个记住的赢**（后续调用直接返回）。
+     *
+     * 内容级校验放在这里，而不是三个调用点各自判断：这是唯一收口处，漏一个就会让"空歌词"
+     * 挤掉后面本来能显示的行级歌词 —— 而它一旦被记住就会在结尾抢先返回，用户看到的是空白。
+     *
+     * 上游为同一类失败专门加了 `./validity`（commit 1eb0504e「防止空歌词被解析标记为逐字」），
+     * 另一条兜底链 `lineByLineFallback` 的每个写入点都在 `hasRenderableLyrics` 块内。两条链
+     * 必须用**同一把尺子**，否则守卫更松的那条会单方面决定最终结果。
+     */
     const rememberLineLevel = (
+        lyrics: LyricData | null | undefined,
         build: () => Promise<AutoMatchBestLyricMatch>,
         source: LyricProviderSource,
     ): void => {
         if (!options.acceptLineLevelLyrics || lineLevelFallback) {
+            return;
+        }
+        if (!hasRenderableLyrics(lyrics)) {
+            console.log(`[autoMatchBestLyric] ${source} returned lyrics with no renderable lines; not keeping it as a fallback.`);
             return;
         }
         console.log(`[autoMatchBestLyric] ${source} has line-level lyrics only; keeping as fallback while word-by-word sources are tried.`);
@@ -469,7 +484,7 @@ export async function autoMatchBestLyric(
                         console.log(`[autoMatchBestLyric] Keeping NetEase line-by-line lyrics as fallback while checking for word-by-word lyrics.`);
                     }
                     if (processed.lyrics) {
-                        rememberLineLevel(async () => ({
+                        rememberLineLevel(processed.lyrics, async () => ({
                             lyrics: await resolveMatchedLyrics(processed.lyrics!, processed, 'netease', song),
                             source: 'netease',
                             id: song.id,
@@ -545,7 +560,7 @@ export async function autoMatchBestLyric(
                         console.log(`[autoMatchBestLyric] Keeping QQ line-by-line lyrics as fallback while checking for word-by-word lyrics.`);
                     }
                     if (parsedLyrics) {
-                        rememberLineLevel(async () => ({
+                        rememberLineLevel(parsedLyrics, async () => ({
                             lyrics: parsedLyrics,
                             source: 'qq',
                             id: song.id,
@@ -587,7 +602,7 @@ export async function autoMatchBestLyric(
                         console.log(`[autoMatchBestLyric] Keeping Kugou line-by-line lyrics as fallback while checking for word-by-word lyrics.`);
                     }
                     if (processed?.lyrics) {
-                        rememberLineLevel(async () => ({
+                        rememberLineLevel(processed.lyrics, async () => ({
                             lyrics: await resolveMatchedLyrics(processed.lyrics!, processed, 'kugou', song),
                             source: 'kugou',
                             id: song.id,
@@ -602,15 +617,20 @@ export async function autoMatchBestLyric(
         }
     }
 
-    // 行级兜底有**两条**独立实现的路径，两边各自加的，合并时都保留、按优先级排列：
+    // 行级兜底有**两条**独立实现的路径，两边各自加的，合并时都保留：
     //
     //   1. `lineLevelFallback`（本分支）：调用方显式 opt-in（`acceptLineLevelLyrics`）时才记录，
     //      存的是 thunk，命中时重新跑一次 `resolveMatchedLyrics`（含 chorus 解析），结果更完整。
-    //   2. `lineByLineFallback`（上游）：搜索过程中见过的**最高分**行级匹配，无条件记录。
+    //      设置点 = netease / qq / kugou 三个 provider 来源。
+    //   2. `lineByLineFallback`（上游）：搜索过程中见过的第一个行级匹配，无条件记录。
+    //      设置点 = 同样的三个 provider 来源，外加 AMLL 的 qq / ncm 两条探测。
     //
-    // 先试 1 再试 2：调用方既然显式要了行级歌词，就走那条更完整的路；没 opt-in 的调用方
-    // 仍由上游那条兜底，行为不回退。两条都只放宽**时间粒度**，不放宽**曲目身份** —— 候选
-    // 都过了同一套身份与分数门槛。
+    // 两者的设置点在 provider 上是**重合**的，所以 1 先返回时 2 在那些点上永远轮不到；2 真正
+    // 独有覆盖的是 AMLL 两条探测（`tryAmllDbCandidate` 自己已用 `hasRenderableLyrics` 收口）。
+    // 因此这个顺序不是"两条互补的路"，而是"provider 走 1、AMLL 走 2"。
+    //
+    // 两条都只放宽**时间粒度**，不放宽**曲目身份** —— 候选都过了同一套身份与分数门槛；内容级
+    // 可渲染性也由同一把尺子（`hasRenderableLyrics`）把关，见 `rememberLineLevel` 的注释。
     //
     // 读进局部常量是必要的：`lineLevelFallback` 只在闭包里被赋值，TS 的控制流分析会把它在
     // 这里的类型收窄成 `null`，直接调用会报「not callable」。

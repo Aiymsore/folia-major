@@ -751,4 +751,85 @@ describe('autoMatchBestLyric', () => {
         const result = await autoMatchBestLyric('Song Title', 'Artist Name', 200000);
         expect(result).toBeNull();
     });
+
+    // 行级兜底有两条链（本分支的 lineLevelFallback 与上游的 lineByLineFallback），设置点在
+    // provider 上重合、结尾先返回前者。上游那条的每个写入点都在 `hasRenderableLyrics` 块内，
+    // 本分支那条曾经只判断 `if (lyrics)` —— 守卫更松的那条会单方面决定最终结果：一个"解析出
+    // 空行"的候选先被记住，结尾就抢先返回它，用户看到空白，而后面本来有可用的行级歌词。
+    //
+    // 下面两条锁住"两条链用同一把尺子"。默认来源顺序是 qq → netease → amll → kugou，所以让
+    // 排在前面的 QQ 返回不可渲染的歌词、排在后面的 NetEase 返回正常行级歌词，断言 NetEase 赢。
+    it('does not let a QQ candidate with no lyric lines shadow a later NetEase one', async () => {
+        searchQQLyricsMock.mockResolvedValue([
+            { id: 201, name: 'Song Title', durationMs: 201000, artists: [{ id: 1, name: 'Artist Name' }], album: { id: 0, name: '' }, qqMid: 'mid-empty' }
+        ]);
+        fetchQQLyricsMock.mockResolvedValue({ lines: [], isWordByWord: false });
+
+        cloudSearchMock.mockResolvedValue({
+            result: {
+                songs: [
+                    { id: 101, name: 'Song Title', dt: 200000, ar: [{ name: 'Artist Name' }] }
+                ]
+            }
+        });
+        getLyricMock.mockResolvedValue({ lyric: '[00:00.00]line lyric' });
+        const neteaseLineLevel = createLyrics(false);
+        processNeteaseLyricsMock.mockResolvedValue({
+            lyrics: neteaseLineLevel,
+            mainLrc: 'line lyric',
+            yrcLrc: null,
+            transLrc: '',
+            isPureMusic: false,
+            chorusRanges: [],
+        });
+        searchKugouLyricsMock.mockResolvedValue([]);
+
+        const result = await autoMatchBestLyric('Song Title', 'Artist Name', 200000, {
+            acceptLineLevelLyrics: true,
+        }) as any;
+
+        expect(result).not.toBeNull();
+        expect(result.source).toBe('netease');
+        expect(result.id).toBe(101);
+        expect(result.lyrics).toBe(neteaseLineLevel);
+    });
+
+    it('does not let a QQ candidate whose lines carry no text shadow a later NetEase one', async () => {
+        // validity.ts 的第二个条件：行存在但既无正文也无翻译，同样不算可渲染。
+        searchQQLyricsMock.mockResolvedValue([
+            { id: 201, name: 'Song Title', durationMs: 201000, artists: [{ id: 1, name: 'Artist Name' }], album: { id: 0, name: '' }, qqMid: 'mid-blank' }
+        ]);
+        fetchQQLyricsMock.mockResolvedValue({
+            lines: [{ fullText: '   ', startTime: 0, endTime: 1, words: [] }],
+            isWordByWord: false,
+        });
+
+        cloudSearchMock.mockResolvedValue({
+            result: {
+                songs: [
+                    { id: 101, name: 'Song Title', dt: 200000, ar: [{ name: 'Artist Name' }] }
+                ]
+            }
+        });
+        getLyricMock.mockResolvedValue({ lyric: '[00:00.00]line lyric' });
+        const neteaseLineLevel = createLyrics(false);
+        processNeteaseLyricsMock.mockResolvedValue({
+            lyrics: neteaseLineLevel,
+            mainLrc: 'line lyric',
+            yrcLrc: null,
+            transLrc: '',
+            isPureMusic: false,
+            chorusRanges: [],
+        });
+        searchKugouLyricsMock.mockResolvedValue([]);
+
+        const result = await autoMatchBestLyric('Song Title', 'Artist Name', 200000, {
+            acceptLineLevelLyrics: true,
+        }) as any;
+
+        expect(result).not.toBeNull();
+        expect(result.source).toBe('netease');
+        expect(result.id).toBe(101);
+        expect(result.lyrics).toBe(neteaseLineLevel);
+    });
 });
