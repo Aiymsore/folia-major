@@ -83,9 +83,23 @@ jobs:
         with:
           workspaces: packaging/windows/wallpaper-helper
 
+      - name: Cache apple-music-smtc-helper Cargo build
+        if: runner.os == 'Windows'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packaging/windows/apple-music-smtc-helper
+
       - name: Build wallpaper helper (Windows only)
         if: runner.os == 'Windows'
         run: npm run build:wallpaper-helper
+
+      # REQUIRED, not an optimisation: build/folia-apple-music-smtc-helper.exe is gitignored, and
+      # electron-builder silently skips an extraResources entry whose source file is missing.
+      # Without this the package ships no helper and the external-media backend reports itself
+      # unavailable on a machine that enabled it.
+      - name: Build Apple Music SMTC helper (Windows only)
+        if: runner.os == 'Windows'
+        run: npm run build:apple-music-smtc-helper
 
       - name: Build windowtolayer (Linux only)
         if: runner.os == 'Linux'

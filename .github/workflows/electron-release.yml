@@ -148,12 +148,30 @@ jobs:
         with:
           workspaces: packaging/windows/wallpaper-helper
 
+      - name: Cache apple-music-smtc-helper Cargo build
+        if: runner.os == 'Windows'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packaging/windows/apple-music-smtc-helper
+
       - name: Build wallpaper helper (Windows only)
         if: runner.os == 'Windows'
         run: |
           # Builds packaging/windows/wallpaper-helper (WorkerW attach + raw-input mouse forward)
           # into build/folia-wallpaper-helper.exe for the win extraResources. No-op elsewhere.
           node packaging/windows/build-wallpaper-helper.mjs
+
+      - name: Build Apple Music SMTC helper (Windows only)
+        if: runner.os == 'Windows'
+        run: |
+          # Builds packaging/windows/apple-music-smtc-helper (Windows SMTC reader) into
+          # build/folia-apple-music-smtc-helper.exe for the win extraResources. No-op elsewhere.
+          #
+          # REQUIRED, not an optimisation: the .exe is gitignored, and electron-builder silently
+          # skips an extraResources entry whose source file is missing. Without this step the
+          # packaged app ships no helper, and the external-media backend reports itself unavailable
+          # on a machine that enabled it.
+          node packaging/windows/build-apple-music-smtc-helper.mjs
 
       - name: Build windowtolayer from upstream + patch (Linux only)
         if: runner.os == 'Linux'
