@@ -1,9 +1,11 @@
 # Folia 技术与开发说明
 
-这份文档收纳仓库 README 中较细的部署、开发、桌面端和技术栈说明。更完整的使用指南也可以访问专门的文档站点：
+这份文档收纳仓库 README 中较细的部署、开发、桌面端和技术栈说明。
 
-- [Folia Guide](https://folia-site.cielaniska.top/guide/)
+- [外部媒体后端](external-media-backend.md) —— 本 fork 的 Apple Music 后端
 - [Stage API 文档](../test/manual/stage-client/README.md)
+
+> 上游另有一个文档站（folia-site.cielaniska.top），但它讲的是上游版本，对本 fork 不一定适用。
 
 ## 桌面端说明
 

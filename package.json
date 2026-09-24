@@ -3,8 +3,8 @@
   "productName": "Folia",
   "description": "Lyrics Reimagine",
   "author": {
-    "name": "chthollyphile",
-    "email": "chthollyphile@users.noreply.github.com"
+    "name": "Aiymsore",
+    "email": "yaoxisore@gmail.com"
   },
   "private": true,
   "version": "0.7.8",
@@ -47,7 +47,7 @@
     "dev:electron:dist:swiftshader": "cross-env ELECTRON_DEV=false ELECTRON=true ELECTRON_LINUX_PACKAGED_GRAPHICS=true FOLIA_LINUX_GRAPHICS_MODE=swiftshader FOLIA_WINDOWTOLAYER_PATH=build/windowtolayer vite build && electron .",
     "dev:electron:dist:software": "cross-env ELECTRON_DEV=false ELECTRON=true ELECTRON_LINUX_PACKAGED_GRAPHICS=true FOLIA_LINUX_GRAPHICS_MODE=software FOLIA_WINDOWTOLAYER_PATH=build/windowtolayer vite build && electron .",
     "build:electron:dir": "cross-env ELECTRON_DEV=false ELECTRON=true vite build && npm run build:windowtolayer && npm run build:wallpaper-helper && electron-builder --linux dir",
-    "build:electron": "cross-env ELECTRON_DEV=false ELECTRON=true vite build && npm run build:windowtolayer && npm run build:wallpaper-helper && npm run build:apple-music-smtc-helper && electron-builder",
+    "build:electron": "cross-env ELECTRON_DEV=false ELECTRON=true vite build && npm run build:windowtolayer && npm run build:wallpaper-helper && npm run build:apple-music-smtc-helper && electron-builder --publish never",
     "build:windowtolayer": "node packaging/linux/build-windowtolayer.mjs",
     "build:wallpaper-helper": "node packaging/windows/build-wallpaper-helper.mjs",
     "build:apple-music-smtc-helper": "node packaging/windows/build-apple-music-smtc-helper.mjs",
@@ -58,7 +58,7 @@
     "manual:ai-probe": "node test/manual/ai_probe.mjs"
   },
   "build": {
-    "appId": "top.izuna.foliamajor",
+    "appId": "com.aiymsore.folia",
     "productName": "Folia",
     "beforePack": "build/beforePack.cjs",
     "afterPack": "build/afterPack.cjs",
@@ -74,7 +74,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "chthollyphile",
+        "owner": "Aiymsore",
         "repo": "folia-major"
       }
     ],

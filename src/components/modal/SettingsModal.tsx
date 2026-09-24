@@ -1461,7 +1461,14 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                             >
                                                 {t('help.madeBy')}
                                             </button>{' '}
-                                            <a href="https://github.com/chthollyphile/folia-major" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors underline decoration-white/30 hover:decoration-white">chthollyphile/folia-major</a>
+                                            <a href="https://github.com/Aiymsore/folia-major" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors underline decoration-white/30 hover:decoration-white">Aiymsore/folia-major</a>
+                                        </p>
+                                        {/* 这是上游 Folia 的 fork。AGPL-3.0 要求保留原作者署名，
+                                            所以这里单独列一行上游，而不是把它从「Project:」里删掉。
+                                            完整贡献者名单在仓库根目录的 CONTRIBUTORS.md。 */}
+                                        <p className="text-xs opacity-40" style={{ color: 'var(--text-secondary)' }}>
+                                            Fork of{' '}
+                                            <a href="https://github.com/chthollyphile/folia-major" target="_blank" rel="noopener noreferrer" className="hover:opacity-80 transition-opacity underline decoration-white/20">chthollyphile/folia-major</a>
                                         </p>
                                     </div>
                                     <div className="flex flex-col items-center gap-2 mt-6 mb-2 text-xs font-mono text-center">

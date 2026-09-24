@@ -9,23 +9,29 @@
 
 Lyrics Reimagined // 辞曲新境
 
-[![GitHub release](https://img.shields.io/github/v/release/chthollyphile/folia-major?label=release)](https://github.com/chthollyphile/folia-major/releases)
-[![License](https://img.shields.io/github/license/chthollyphile/folia-major)](https://github.com/chthollyphile/folia-major/blob/main/LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/chthollyphile/folia-major?style=social)](https://github.com/chthollyphile/folia-major/stargazers)
+> [!IMPORTANT]
+> **这是 [chthollyphile/folia-major](https://github.com/chthollyphile/folia-major) 的 fork。**
+>
+> 本仓库在上游基础上增加了 **Apple Music 播放后端**：把 Apple Music 当作一个显式选择的播放后端，
+> Folia 仍然拥有队列和 UI，实际出声的是 Chrome 里的 music.apple.com 网页版播放器。
+>
+> - **下载请用本仓库的 [Releases](https://github.com/Aiymsore/folia-major/releases)**，
+>   不要用上游的下载链接 —— 那是没有 Apple Music 功能的版本。
+> - 上游文档站（folia-site.cielaniska.top）讲的是上游版本，对本构建不一定适用；
+>   本仓库的 `docs/` 是随代码走的。
+> - 原项目版权归上游作者及全体贡献者所有（AGPL-3.0），署名见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
+
+[![License](https://img.shields.io/github/license/Aiymsore/folia-major)](https://github.com/Aiymsore/folia-major/blob/main/LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/chthollyphile/folia-major)
-[![Discord](https://img.shields.io/discord/1541051241822687232?logo=discord&logoColor=white&label=Join%20our%20Discord)](https://discord.gg/dMDBTHxeKd)
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
 [![All Contributors](https://img.shields.io/badge/all_contributors-35-orange.svg?style=flat-square)](CONTRIBUTORS.md)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 
-[获取方式](https://github.com/chthollyphile/folia-major#%E8%8E%B7%E5%8F%96%E6%96%B9%E5%BC%8F)
-·
-[Vercel 部署](https://vercel.com/new/clone?repository-url=https://github.com/chthollyphile/folia-major)
-·
-[使用指南](https://folia-site.cielaniska.top/guide/)
+[获取方式](#获取方式)
 ·
 [技术说明](docs/technical.md)
+·
+[外部媒体后端](docs/external-media-backend.md)
 
 </div>
 
@@ -35,7 +41,7 @@ Folia是一个以全屏沉浸式歌词播放为核心的在线音乐播放器，
 
 提供基于Electron的 windows/ macOS/ Linux 桌面端版本与基于 Node.js 的 Web 版本，支持多平台部署。
 
-如果希望能够在移动设备上使用，或在浏览器上体验，可以选择[一键部署到 Vercel](https://folia-site.cielaniska.top/guide/deploy-vercel) 的 Web 版本，或自行部署到其他支持 Node.js 的平台。
+如果希望能够在移动设备上使用，或在浏览器上体验，可以选择一键部署到 Vercel 的 Web 版本（见下方「获取方式」），或自行部署到其他支持 Node.js 的平台。
 
 ## 展示
 
@@ -122,13 +128,13 @@ https://github.com/user-attachments/assets/704f195a-2194-434b-86e8-8f36290e5cc4
 
 ### 一键部署
 
-如果你希望快速上线 Web 版本，请阅读 [Vercel 一键部署指南](https://folia-site.cielaniska.top/guide/deploy-vercel) 来创建项目
+Web 版本可以自行部署到 Vercel / Cloudflare，部署入口请用本仓库（下面的按钮已经指向本 fork）：
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/chthollyphile/folia-major) 
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/Aiymsore/folia-major)
 
-项目也支持一键部署到 Cloudflare，请参考 Vercel 的部署教程进行相应调整。
+项目也支持一键部署到 Cloudflare，配置方式与 Vercel 一致：
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/chthollyphile/folia-major)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Aiymsore/folia-major)
 
 Vercel 与 Cloudflare 上的 QQ 音乐不再需要额外部署一个常驻 API 实例：把 `VITE_QQ_API_BASE` 填成 `/api/qq`，再配一个 `QQ_SESSION_SECRET`（服务端密钥，**不加 `VITE_` 前缀**）即可。这种形态默认只支持微信扫码登录，且播放前必须先登录；Cloudflare 上可以再绑定一个 Durable Object，增加 QQ 扫码登录方式。完整步骤、平台差异和排错方法见 [QQ 音乐部署指南](docs/qq-music-deployment.md)。
 
@@ -142,18 +148,23 @@ Vercel 与 Cloudflare 上的 QQ 音乐不再需要额外部署一个常驻 API �
 
 ### 直接下载
 
-- **Windows / macOS / Linux**: 最新版本的安装包请前往 [Releases 页面](https://github.com/chthollyphile/folia-major/releases/latest) 下载。
-- **Arch Linux**: 可通过 AUR 获取 [folia-major-bin](https://aur.archlinux.org/packages/folia-major-bin)。
-- **Flatpak**: 社区提供的第三方 flatpak，详情见 [Flatpark](https://flatpark.org/apps/top.izuna.foliamajor/)。
-
-> [!IMPORTANT]
-> 如果国内网络从 GitHub Releases 下载较慢，可以使用 [夸克网盘](https://pan.quark.cn/s/6e4c6fa3bc6f) 或 [百度云](https://pan.baidu.com/s/1f0x3g-8PMcNCO-TJ5z1rPw?pwd=flia) 下载。网盘链接仅提供 Windows 与 Apple silicon 的正式版安装包.
+- **Windows**: 最新版本的安装包请前往 [本仓库 Releases 页面](https://github.com/Aiymsore/folia-major/releases/latest) 下载。
+- **macOS / Linux**: 本 fork 目前只提供 Windows 安装包（Apple Music 后端依赖 Windows SMTC）。
+  需要 macOS / Linux 版本请从 [上游仓库](https://github.com/chthollyphile/folia-major/releases/latest)
+  获取，但注意上游版本不含 Apple Music 功能。
 
 Linux 包、Wayland / Hyprland 遥控窗和桌面端细节见 [技术与开发说明](docs/technical.md)。
 
 ## 文档与开发
 
-更完整的使用说明请访问 [Folia Guide](https://folia-site.cielaniska.top/guide/)。
+本仓库的文档在 `docs/` 下，随代码走：
+
+- [外部媒体后端](docs/external-media-backend.md) —— 本 fork 新增的 Apple Music 后端：拓扑、命令面、保守契约
+- [Apple Music 歌词时钟](docs/apple-music-lyric-clock.md) —— 位置量化与校正层的实测依据
+- [网页播放器 DRM 调研](docs/apple-music-webplayer-drm-research.md) —— 为什么必须走 Chrome 扩展而不是内嵌播放器
+- [Chrome 扩展说明](chrome-extension/README.md) —— 安装与两世界拆分的原因
+
+上游的文档站（folia-site.cielaniska.top）讲的是上游版本，对本构建不一定适用。
 
 部署、环境变量、本地开发、Stage API、常用脚本和技术栈见 [技术与开发说明](docs/technical.md)。
 
@@ -164,11 +175,11 @@ Folia 提供了可选的官方同步服务端 `sync-server`，用于在多个设
 支持以下部署方式：
 
 - **Cloudflare Workers / D1**：免服务器运维的 Serverless 部署，推荐使用。
-  [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/chthollyphile/folia-major/tree/main/sync-server)
+  [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Aiymsore/folia-major/tree/main/sync-server)
 - **Docker**：镜像与 Compose 入口见 [Docker 部署目录](deploy/docker/README.md)。
 - **Node.js 自托管**：使用 SQLite，适合本地或不方便使用 Docker 的环境。
 
-详细的环境变量、Token 配置与部署步骤请参阅 [Sync-Server 部署指南](https://folia-site.cielaniska.top/guide/deploy-sync)。部署完成后，在 Folia 的“存储设置”中填写服务端地址和 `SYNC_TOKEN` 即可启用同步。
+环境变量、Token 配置与部署步骤见 [sync-server/README.md](sync-server/README.md)。部署完成后，在 Folia 的“存储设置”中填写服务端地址和 `SYNC_TOKEN` 即可启用同步。
 
 ## 本地音乐与匹配说明
 

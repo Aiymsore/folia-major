@@ -162,29 +162,17 @@ export default async function viteConfig(_config: ConfigEnv): Promise<UserConfig
     }
   }
 
-  let commitSuffix = '';
-  const canResolveCommitName = /^[0-9a-f]{7,40}$/i.test(commitHash) && !/^0+$/.test(commitHash);
-  if (canResolveCommitName) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2000);
-      const res = await fetch(`https://namoe.izuna.top/api/namoe?hash=${commitHash}`, {
-        signal: controller.signal
-      });
-      clearTimeout(timeout);
-
-      if (res.ok) {
-        const data = await res.json() as { name?: string };
-        if (data?.name) {
-          commitSuffix = `/${data.name}`;
-        }
-      }
-    } catch (e) {
-      // Ignore errors during fetch to prevent build failure
-    }
-  }
-  if (process.env.REQUIRE_COMMIT_NAME === 'true' && canResolveCommitName && !commitSuffix) {
-    throw new Error(`Could not resolve the commit name for ${commitHash}`);
+  // The commit's human-readable name used to be fetched from the upstream author's service
+  // (namoe.izuna.top) and appended to the hash. That lookup is gone from this fork: it is someone
+  // else's server, it made every build depend on a third party being up, and all it produced was a
+  // cosmetic suffix on the version string. `__COMMIT_HASH__` is now just the hash.
+  //
+  // REQUIRE_COMMIT_NAME used to exist to guarantee that lookup had succeeded before a Docker image
+  // was published. With nothing left to resolve, the flag has nothing to enforce, so a build that
+  // still passes it (the docker workflow does) must not fail.
+  const commitSuffix = '';
+  if (process.env.REQUIRE_COMMIT_NAME === 'true') {
+    console.warn('[build] REQUIRE_COMMIT_NAME is set but commit-name lookup was removed in this fork; ignoring.');
   }
 
   const appVersionLabel = process.env.APP_VERSION_LABEL?.trim() || 'Realeco';

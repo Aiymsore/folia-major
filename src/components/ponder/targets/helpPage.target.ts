@@ -161,13 +161,16 @@ const commandExamples: PonderSceneScript = {
     ],
 };
 
-/** 第四章：从底部动作直达官方文档。 */
+/** 第四章：从底部动作直达源码仓库。
+ *
+ * 原先指向作者的指南站（folia-site.cielaniska.top）。那个站点讲的是上游 Folia，本构建的用户
+ * 照着做只会得到对不上的说明，所以改指本仓库 —— 那里有 docs/ 与本构建的 issue 入口。 */
 const docs: PonderSceneScript = {
     id: 'help-page-docs',
     titleKey: 'ponder.scenes.helpPageDocs',
     action: {
         kind: 'openUrl',
-        url: 'https://folia-site.cielaniska.top/guide/',
+        url: 'https://github.com/Aiymsore/folia-major',
         labelKey: 'ponder.actions.openDocs',
     },
     anchors: ONBOARDING_ILLUSTRATION,
